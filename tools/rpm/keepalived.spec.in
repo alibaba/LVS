@@ -1,0 +1,79 @@
+# Ugly, but we need headers from a kernel to rebuild against
+# %define kernel %(rpm -q kernel-devel --qf '%{RPMTAG_VERSION}-%{RPMTAG_RELEASE}\\n' 2>/dev/null | head -1)
+
+Name:    keepalived
+Version: _VERSION_
+Release: _RELEASE_
+Summary: HA monitor built upon LVS, VRRP and services poller
+Group: Taobao/Common
+URL: http://svn.simba.taobao.com/svn/cdn/trunk/keepalived/Revision_SVN_REVISION
+
+Source:        %{name}-%{version}.tar.gz
+License:       GPL
+BuildRequires: kernel, kernel-devel, kernel-headers
+BuildRequires: openssl-devel
+BuildRoot:     %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
+
+%description
+The main goal of the keepalived project is to add a strong end robust keepalive
+facility to the Linux Virtual Server project.
+This project is written in C with multilayer TCP/IP stack checks.
+Keepalived implements a framework based on three family checks:
+Layer3, Layer4 & Layer5.
+This framework gives the daemon the ability of checking a LVS server pool states.
+When one of the server of the LVS server pool is down, keepalived informs the linux
+kernel via a setsockopt call to remove this server entrie from the LVS topology.
+In addition keepalived implements a VRRPv2 stack to handle director failover.
+
+So in short keepalived is a userspace daemon for LVS cluster nodes healthchecks
+and LVS directors failover.
+
+%prep
+%setup -q
+
+%build
+./configure --with-kernel-dir="/lib/modules/`uname -r`/build"
+
+make
+
+%install
+[ "%{buildroot}" != / ] && rm -rf %{buildroot}
+%makeinstall
+
+%post
+/sbin/chkconfig --add keepalived
+%{_initrddir}/keepalived start
+exit 0
+
+%preun
+if [ $1 -eq 0 ]; then
+   [ -e /var/lock/subsys/keepalived ] && %{_initrddir}/keepalived stop
+   /sbin/chkconfig --del keepalived
+fi
+exit 0
+
+%postun
+if [ $1 -eq 1 ]; then
+   [ -e /var/lock/subsys/keepalived ] &&
+      %{_initrddir}/keepalived restart
+fi
+exit 0
+
+%clean
+[ "%{buildroot}" != / ] && rm -rf %{buildroot}
+
+%files
+%defattr(-,root,root)
+%{_bindir}/genhash
+%{_sbindir}/keepalived
+%{_initrddir}/keepalived
+%config(noreplace) %{_sysconfdir}/sysconfig/keepalived
+%dir %{_sysconfdir}/keepalived/
+%config(noreplace) %{_sysconfdir}/keepalived/*
+%{_mandir}/man?/*
+%doc AUTHOR CONTRIBUTORS TODO COPYING README VERSION ChangeLog
+%doc doc/keepalived.conf.SYNOPSIS doc/samples/
+
+%changelog
+* Thu Jan 21 2011 Yitong <yitong@taobao.com> 1.2.2
+- first create package

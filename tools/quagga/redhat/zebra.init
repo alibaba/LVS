@@ -1,0 +1,64 @@
+#!/bin/bash
+#
+# chkconfig: 2345 15 85
+# description: GNU Zebra routing manager
+#
+# processname: zebra
+# config: /etc/quagga/zebra.conf
+
+# source function library
+. /etc/rc.d/init.d/functions
+
+# quagga command line options
+. /etc/sysconfig/quagga
+
+# Check that networking is up.
+[ "${NETWORKING}" = "no" ] && exit 0
+
+# The process must be configured first.
+[ -f /etc/quagga/zebra.conf ] || exit 0
+
+RETVAL=0
+
+prog="zebra"
+
+case "$1" in
+  start)
+	echo -n $"Starting $prog: "
+
+	/sbin/ip route flush proto zebra
+			
+        daemon /usr/sbin/zebra -d $ZEBRA_OPTS
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/zebra
+	echo
+	;;
+  stop)
+	echo -n $"Shutting down $prog: "
+	killproc zebra
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/zebra
+	echo
+	;;
+  restart|reload)
+        $0 stop
+        $0 start
+	RETVAL=$?
+        ;;
+  condrestart)
+        if [ -f /var/lock/subsys/zebra ]; then
+                $0 stop
+		$0 start
+        fi
+	RETVAL=$?
+        ;;
+  status)
+        status zebra
+	RETVAL=$?
+        ;;
+  *)
+	echo $"Usage: $0 {start|stop|restart|reload|condrestart|status}"
+	exit 1
+esac
+
+exit $RETVAL

@@ -1,0 +1,78 @@
+
+			   Quagga TODO list
+                             2004/11/24
+
+zebra:
+
+o Pointopoint address configuration.
+o Multiple (alias) address configuration for the interface when kernel
+  support it [just starting].
+o improve rtnetlink to handle sequence number tracking and reconciliation
+  and resyncs.
+o Add support for valid and preferred lifetimes to IPv6 addresses 
+o proper support for (at least) 1-level recursive routes
+o Ability to set src on routes, where systems support it.
+o Ability to apply route-maps to daemon route updates.
+
+bgpd:
+
+o BGP TCP MD5 authentication by password command.
+o HUP signal support (reload configuration file).
+o BGP multi-path extension
+o move FSM state to be per-connection, not per-peer.
+o Add support for internal and minimum-metric MED setting
+
+ripd:
+
+o Multipath support.
+
+ospfd:
+
+o Rewrite the incremental RT update code.
+o Demand circuits.
+o Multiple instances.
+o OSPF MIB [SNMP get is amost finished].
+o HUP signal treatment.
+o Fragment Oversized LSAs 
+o move SPF to common code
+o NSSA priority rules (RFC3101 2.4)
+o Type-7 address ranges (RFC3101 2.2)
+o Originating Type-7 default into area (RFC3101 2.7)
+
+ospf6d:
+
+o move SPF to common code
+o add router-id lookups
+
+isisd:
+
+o finish SPF
+o select nearest L2 when running SPF for L1
+o remove the routes when holding time for nexthop expires
+o redistribution
+o autosummary
+
+o Mesh groups (RFC2973)
+o Crypto authentication (RFC3567)
+
+lib:
+o improve route_table speed, eg strided lookups for common prefix depths.
+o improve hash tables, eg auto-growing hash tables
+o move performance sensitive users of hashes over to jhash
+o clean up linked lists
+o ipv6 addresses need concept of valid/preferred
+o implement a generic daemon access/control protocol (eg D-Bus like? 
+  simplified SNMP-a-like?)
+o merge SPF code from ospfd and ospf6d into a common libspf
+o depends-on(generic A/C protocol) move snmp to seperate daemon
+o extend command definitions to allow them to be self-documenting
+o i18n command help strings
+o Document the exported API (DocBook/Doxygen?)
+
+vtysh:
+o untangle readline specific bits
+o add a vtyd with a vty (ie telnet) frontend (as opposed to readline)
+o depends-on(generic A/C protocol) use such
+o better AAA support than just PAM, eg krb5, SASL, LDAP..
+                        -----------------------------
+

@@ -1,0 +1,61 @@
+#!/bin/bash
+#
+# chkconfig: 2345 16 84
+# description: An ISIS routing engine for use with Quagga
+#
+# processname: isisd
+# config: /etc/quagga/isisd.conf
+
+# source function library
+. /etc/rc.d/init.d/functions
+
+# Get network config
+. /etc/sysconfig/network
+
+# Check that networking is up.
+[ "${NETWORKING}" = "no" ] && exit 0
+
+# The process must be configured first.
+[ -f /etc/quagga/isisd.conf ] || exit 0
+
+RETVAL=0
+
+prog="isisd"
+
+case "$1" in
+  start)
+	echo -n $"Starting $prog: "
+        daemon /usr/sbin/isisd -d
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/isisd
+	echo
+	;;
+  stop)
+	echo -n $"Shutting down $prog: "
+	killproc isisd
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/isisd
+	echo
+	;;
+  restart|reload)
+        $0 stop
+        $0 start
+	RETVAL=$?
+        ;;
+  condrestart)
+        if [ -f /var/lock/subsys/isisd ]; then
+                $0 stop
+		$0 start
+        fi
+	RETVAL=$?
+        ;;
+  status)
+        status isisd
+	RETVAL=$?
+        ;;
+  *)
+	echo $"Usage: $0 {start|stop|restart|reload|condrestart|status}"
+	exit 1
+esac
+
+exit $RETVAL

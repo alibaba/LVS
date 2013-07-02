@@ -1,0 +1,103 @@
+#!/usr/bin/python
+#
+# kabitool - Red Hat kABI extraction tool (version 2)
+#
+# We use this script to generate RPM dependencies based on symversions.
+#
+# Author: Jon Masters <jcm@redhat.com>
+# Copyright (C) 2009 Red Hat, Inc.
+#
+# This software may be freely redistributed under the terms of the GNU
+# General Public License (GPL).
+
+# Changelog:
+# 
+# 2009/08/01 - New version based on kABI dep plan for RHEL6.
+#
+
+__author__ = "Jon Masters <jcm@redhat.com>"
+__version__ = "$Revisions: 2.0 $"
+__date__ = "$Date: 2011/05/10 19:14:23 $"
+__copyright__ = "Copyright (C) 2009 Red Hat, Inc"
+__license__ = "GPL"
+
+import getopt
+import os
+import re
+import sha
+import string
+import sys
+
+true = 1
+false = 0
+
+def load_symbols(filename):
+	"""Load the kernel exported symbols from Module.symvers."""
+
+	ksyms = open(filename,"r")
+
+	symbols={}
+
+	while true:
+		line = ksyms.readline()
+		if line == "":
+			break;
+		if line == "\n":
+			continue
+		checksum,symbol,path,license = string.split(line)
+
+		symbols[symbol] = dict(checksum=checksum,
+				       path=path,
+				       license=license)
+
+	return symbols
+
+def output_deps(depsfile,symbols):
+
+	deps_file = open(depsfile,"w")
+
+	for symbol in sorted(symbols.keys()):
+		deps_file.write("kernel("+symbol+") = " +
+				symbols[symbol]['checksum'] + "\n")
+
+def usage():
+	print """
+kabitool: process Module.symvers into useful exported kABI dependencies
+
+	kabitool [-k kernel] [-s symbols ]
+
+	-o		The file to output sorted dependencies to
+
+	-s		The Module.symvers file to import from
+
+"""
+
+if __name__ == "__main__":
+
+	symdeps_file = ""
+	symvers_file = ""
+
+	opts, args = getopt.getopt(sys.argv[1:], 'ho:s:')
+
+	for o, v in opts:
+		if o == "-h":
+			usage()
+			sys.exit(0)
+		if o == "-o":
+			symdeps_file = v
+		if o == "-s":
+			symvers_file = v
+	
+	if (symdeps_file == ""):
+		symdeps_file = "Module.symdeps"
+
+	if (symvers_file == ""):
+		symvers_file = "Module.symvers"
+
+	if not (os.path.isfile(symvers_file)):
+		print "cannot read Module.symvers file"
+		usage()
+		exit(1)
+
+	symbols = load_symbols(symvers_file)
+	output_deps(symdeps_file, symbols)

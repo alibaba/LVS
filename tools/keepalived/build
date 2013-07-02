@@ -1,0 +1,26 @@
+sudo cp ./keepalived/libipvs-2.6/ip_vs.h /usr/include/net/
+if [ $? -ne 0 ]
+then
+	echo -e "\e[1;31m can not cp ip_vs.h, need root privilege \e[0m" 
+	exit
+fi
+
+sudo ./configure
+sudo make clean; sudo make
+
+if [ ! -f ./bin/keepalived ]
+then
+	echo -e "\e[1;31m build failure \e[0m" 
+fi
+
+sudo make install
+sudo cp /usr/local/etc/sysconfig/keepalived /etc/sysconfig/keepalived
+sudo cp /usr/local/sbin/keepalived /usr/sbin/
+if [ ! -d /etc/keepalived ]
+then
+	sudo mkdir /etc/keepalived
+fi
+sudo cp /usr/local/etc/keepalived/keepalived.conf /etc/keepalived
+
+
+

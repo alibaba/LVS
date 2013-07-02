@@ -1,0 +1,27 @@
+This document lists the currently known drivers that are considered
+in tech preview.  Drivers in 'tech preview' are not fully supported
+yet and are expected to still have some bugs that need to be worked
+out.
+
+Please keep this list up-to-date as it will be used by groups for
+customer service.
+
+To mark your driver as 'tech preview', please add the following line
+to your code in a spot that is specific to the code that is marked as
+'tech preview' (ie module_init, quirks, etc).
+
+mark_tech_preview(const char *msg, struct module *module);
+
+msg - custom string to print to the screen (otherwise it uses
+    module->name if NULL)
+module - for modules, use THIS_MODULE. If built-in, then use NULL here (but
+    make sure 'msg' is filled in)
+
+LIST (provide full path)
+========================
+DIF/DIX			block/blk-integrity.c
+bna			drivers/net/bna/bnad.c
+bfa			drivers/scsi/bfa/bfad_im.c
+btrfs			fs/btrfs/super.c
+ecryptfs		fs/ecryptfs/main.c
+fscache			fs/fscache/main.c
