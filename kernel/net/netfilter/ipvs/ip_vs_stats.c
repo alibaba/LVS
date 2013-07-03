@@ -54,11 +54,11 @@ void ip_vs_in_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 {
 	struct ip_vs_dest *dest = cp->dest;
 	if (dest && (dest->flags & IP_VS_DEST_F_AVAILABLE)) {
-		dest->stats.inpkts++;
-		dest->stats.inbytes += skb->len;
+		ip_vs_stats_this_cpu(dest->stats).inpkts++;
+		ip_vs_stats_this_cpu(dest->stats).inbytes += skb->len;
 
-		dest->svc->stats.inpkts++;
-		dest->svc->stats.inbytes += skb->len;
+		ip_vs_stats_this_cpu(dest->svc->stats).inpkts++;
+		ip_vs_stats_this_cpu(dest->svc->stats).inbytes += skb->len;
 
 		ip_vs_stats_this_cpu(ip_vs_stats).inpkts++;
 		ip_vs_stats_this_cpu(ip_vs_stats).inbytes += skb->len;
@@ -71,11 +71,11 @@ void ip_vs_out_stats(struct ip_vs_conn *cp, struct sk_buff *skb)
 {
 	struct ip_vs_dest *dest = cp->dest;
 	if (dest && (dest->flags & IP_VS_DEST_F_AVAILABLE)) {
-		dest->stats.outpkts++;
-		dest->stats.outbytes += skb->len;
+		ip_vs_stats_this_cpu(dest->stats).outpkts++;
+		ip_vs_stats_this_cpu(dest->stats).outbytes += skb->len;
 
-		dest->svc->stats.outpkts++;
-		dest->svc->stats.outbytes += skb->len;
+		ip_vs_stats_this_cpu(dest->svc->stats).outpkts++;
+		ip_vs_stats_this_cpu(dest->svc->stats).outbytes += skb->len;
 
 		ip_vs_stats_this_cpu(ip_vs_stats).outpkts++;
 		ip_vs_stats_this_cpu(ip_vs_stats).outbytes += skb->len;
@@ -87,9 +87,9 @@ void ip_vs_conn_stats(struct ip_vs_conn *cp, struct ip_vs_service *svc)
 {
 	struct ip_vs_dest *dest = cp->dest;
 	if(dest) {
-		dest->stats.conns++;
+		ip_vs_stats_this_cpu(dest->stats).conns++;
 
-		dest->svc->stats.conns++;
+		ip_vs_stats_this_cpu(dest->svc->stats).conns++;
 
 		ip_vs_stats_this_cpu(ip_vs_stats).conns++;
 	}

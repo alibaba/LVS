@@ -232,6 +232,7 @@ free_vs(void *data)
 	FREE_PTR(vs->quorum_up);
 	FREE_PTR(vs->quorum_down);
 	FREE_PTR(vs->local_addr_gname);
+	FREE_PTR(vs->vip_bind_dev);
 	FREE(vs);
 }
 static void
@@ -300,6 +301,8 @@ dump_vs(void *data)
 		dump_list(vs->rs);
 	if (vs->local_addr_gname)
 		log_message(LOG_INFO, " LOCAL_ADDR GROUP = %s", vs->local_addr_gname);
+	if (vs->vip_bind_dev)
+		log_message(LOG_INFO, " vip_bind_dev = %s", vs->vip_bind_dev);
 }
 
 void
@@ -331,6 +334,7 @@ alloc_vs(char *ip, char *port)
 	new->hysteresis = 0;
 	new->quorum_state = UP;
 	new->local_addr_gname = NULL;
+	new->vip_bind_dev = NULL;
 
 	list_add(check_data->vs, new);
 }

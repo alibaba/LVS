@@ -15,10 +15,8 @@
  * [19-16] snd_wscale
  * [15-0]  MSSIND
  */
-#define IP_VS_SYNPROXY_OTHER_BITS 12
-#define IP_VS_SYNPROXY_OTHER_MASK (((__u32)1 << IP_VS_SYNPROXY_OTHER_BITS)-1)
-#define IP_VS_SYNPROXY_MSS_BITS 12
-#define IP_VS_SYNPROXY_MSS_MASK ((__u32)0xf << IP_VS_SYNPROXY_MSS_BITS)
+#define IP_VS_SYNPROXY_MSS_BITS 16
+#define IP_VS_SYNPROXY_MSS_MASK (((__u32)1 << IP_VS_SYNPROXY_MSS_BITS) - 1)
 
 #define IP_VS_SYNPROXY_SACKOK_BIT 21
 #define IP_VS_SYNPROXY_SACKOK_MASK ((__u32)1 << IP_VS_SYNPROXY_SACKOK_BIT)
@@ -40,8 +38,20 @@ struct ip_vs_synproxy_opt {
 	u16 mss_clamp;		/* Maximal mss, negotiated at connection setup  */
 };
 
-/* syncookie init */
-extern int ip_vs_net_secret_init(void);
+/* 
+ * For syncookie compute and check 
+ */
+extern __u32 ip_vs_synproxy_cookie_v4_init_sequence(struct sk_buff *skb,
+						    struct ip_vs_synproxy_opt
+						    *opts);
+extern int ip_vs_synproxy_v4_cookie_check(struct sk_buff *skb, __u32 cookie,
+					  struct ip_vs_synproxy_opt *opt);
+
+extern __u32 ip_vs_synproxy_cookie_v6_init_sequence(struct sk_buff *skb,
+						    struct ip_vs_synproxy_opt
+						    *opts);
+extern int ip_vs_synproxy_v6_cookie_check(struct sk_buff *skb, __u32 cookie,
+					  struct ip_vs_synproxy_opt *opt);
 
 /*
  * Syn-proxy step 1 logic: receive client's Syn.

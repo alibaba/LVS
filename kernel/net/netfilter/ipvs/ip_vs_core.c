@@ -861,6 +861,29 @@ ip_vs_out(unsigned int hooknum, struct sk_buff *skb,
 						  sizeof(_ports), _ports);
 			if (pptr == NULL)
 				return NF_ACCEPT;	/* Not for me */
+			if (ip_vs_lookup_real_service(af, iph.protocol,
+						      &iph.saddr, pptr[0])) {
+				/*
+				 * Notify the real server: there is no
+				 * existing entry if it is not RST
+				 * packet or not TCP packet.
+				 */
+				if (iph.protocol != IPPROTO_TCP
+				    || !is_tcp_reset(skb, iph.len)) {
+#ifdef CONFIG_IP_VS_IPV6
+					if (af == AF_INET6)
+						icmpv6_send(skb,
+							    ICMPV6_DEST_UNREACH,
+							    ICMPV6_PORT_UNREACH,
+							    0, skb->dev);
+					else
+#endif
+						icmp_send(skb,
+							  ICMP_DEST_UNREACH,
+							  ICMP_PORT_UNREACH, 0);
+					return NF_DROP;
+				}
+			}
 		}
 		IP_VS_DBG_PKT(12, pp, skb, 0,
 			      "packet continues traversal as normal");
@@ -1432,8 +1455,6 @@ static int __init ip_vs_init(void)
 		pr_err("can't register hooks.\n");
 		goto cleanup_conn;
 	}
-
-	ip_vs_net_secret_init();
 
 	pr_info("ipvs loaded.\n");
 	return ret;

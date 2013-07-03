@@ -149,9 +149,7 @@ static __u16 const msstab[] = {
 	512 - 1,
 	536 - 1,
 	1024 - 1,
-	1280 - 1,
 	1440 - 1,
-	1452 - 1,
 	1460 - 1,
 	4312 - 1,
 	(__u16)-1
@@ -376,7 +374,7 @@ out:	return ret;
  * [21] SACKOK
  * [20] TimeStampOK
  * [19-16] snd_wscale
- * [15-12] MSSIND 
+ * [15-0] MSSIND 
  */
 __u32 ip_vs_synproxy_cookie_v4_init_sequence(struct sk_buff *skb, 
 					     struct ip_vs_synproxy_opt *opts) 
@@ -392,7 +390,7 @@ __u32 ip_vs_synproxy_cookie_v4_init_sequence(struct sk_buff *skb,
 		;
 	opts->mss_clamp = msstab[mssind] + 1;
 
-	data = ((mssind & 0x0f) << IP_VS_SYNPROXY_MSS_BITS);
+	data = mssind & IP_VS_SYNPROXY_MSS_MASK;
 	data |= opts->sack_ok << IP_VS_SYNPROXY_SACKOK_BIT;
 	data |= opts->tstamp_ok << IP_VS_SYNPROXY_TSOK_BIT;
 	data |= ((opts->snd_wscale & 0x0f) << IP_VS_SYNPROXY_SND_WSCALE_BITS);
@@ -426,10 +424,11 @@ int ip_vs_synproxy_v4_cookie_check(struct sk_buff * skb, __u32 cookie,
 	if(res == (__u32)-1) /* count is invalid, jiffies' >> jiffies */
 		goto out;
 
-	mssind = (res & IP_VS_SYNPROXY_MSS_MASK) >> IP_VS_SYNPROXY_MSS_BITS;
+	mssind = res & IP_VS_SYNPROXY_MSS_MASK;
 
 	memset(opt, 0, sizeof(struct ip_vs_synproxy_opt));
-	if ((mssind < NUM_MSS) && ((res & IP_VS_SYNPROXY_OTHER_MASK) == 0)) {
+
+	if (mssind < NUM_MSS) {
 		opt->mss_clamp = msstab[mssind] + 1;
 		opt->sack_ok = (res & IP_VS_SYNPROXY_SACKOK_MASK) >> 
 					IP_VS_SYNPROXY_SACKOK_BIT;

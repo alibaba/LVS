@@ -84,6 +84,7 @@ typedef struct _real_server {
 	int alive;
 	list failed_checkers;	/* List of failed checkers */
 	int set;		/* in the IPVS table */
+	int reload_alive;	/* alpha mode will reset rs to unalive. So save the status before reload here */
 } real_server;
 
 /* local ip address group definition */
@@ -140,7 +141,8 @@ typedef struct _virtual_server {
 	long unsigned hysteresis;	/* up/down events "lag" WRT quorum. */
 	unsigned quorum_state;		/* Reflects result of the last transition done. */
 
-	char *local_addr_gname;		/* local ip address group name */	
+	char *local_addr_gname;		/* local ip address group name */
+	char *vip_bind_dev;		/* the interface name,vip bindto */
 } virtual_server;
 
 /* Configuration data root */

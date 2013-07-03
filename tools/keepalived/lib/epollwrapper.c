@@ -19,8 +19,8 @@ void epoll_init(int *epollfd, struct epoll_event **events)
 	struct rlimit limit;
 
 	/* set fd ulimits  */
-	limit.rlim_cur = EPOLL_MAX_FD; 
-	limit.rlim_max = EPOLL_MAX_FD; 
+	limit.rlim_cur = EPOLL_MAX_FD;
+	limit.rlim_max = EPOLL_MAX_FD;
 	if (setrlimit(RLIMIT_NOFILE, &limit) == -1)
 		log_message(LOG_INFO, "epoll_init: set limit fd to %d failed.", EPOLL_MAX_FD);
 
@@ -50,7 +50,7 @@ fail_epfd:
 fail_events:
 	FREE(epfd_set);
 fail_fdset:
-	return;	
+	return;
 }
 
 /* epoll clean up  */
@@ -58,7 +58,7 @@ void epoll_cleanup(int *epollfd, struct epoll_event **events)
 {
 	close(*epollfd);
 	*epollfd = -1;
-	
+
 	FREE(*events);
 
 	FREE(epfd_set);
@@ -71,7 +71,7 @@ int epoll_handler(int epfd, struct epoll_event *events, TIMEVAL *timer_wait)
 
 	timeout = (timer_wait->tv_sec * TIMER_HZ + timer_wait->tv_usec)/1000;
 	if ((0 == timeout) && (timer_wait->tv_usec > 0)) {
-		select(0, NULL, NULL, NULL, timer_wait);
+		timeout = 1;
 	}
 
 	return epoll_wait(epfd, events, EPOLL_MAX_EV, timeout);
@@ -104,10 +104,9 @@ int epoll_set_fd(int epfd, int dir, int fd, void *data)
 		epfd_set[fd].data[dir] = data;
 		return 0;
 	}
-		
 
 	if (epoll_ctl(epfd, opcode, fd, &ev) != 0) {
-		log_message(LOG_INFO, "epoll_set_fd: %s fd %d failure.", 
+		log_message(LOG_INFO, "epoll_set_fd: %s fd %d failure.",
 					(opcode == EPOLL_CTL_ADD) ? "ADD":"MOD", fd);
 		return -1;
 	}
@@ -153,7 +152,7 @@ int epoll_clear_fd(int epfd, int dir, int fd)
 	ev.data.fd = fd;
 
 	if (epoll_ctl(epfd, opcode, fd, &ev) != 0) {
-		log_message(LOG_INFO, "epoll_clear_fd: %s fd %d failure.", 
+		log_message(LOG_INFO, "epoll_clear_fd: %s fd %d failure.",
 					(opcode == EPOLL_CTL_DEL) ? "DEL":"MOD", fd);
 		return -1;
 	}
@@ -179,7 +178,7 @@ int epoll_fdisset(int fd, int dir)
 		return 0;
 	}
 
-	if (((dir == DIR_RD) && ((epfd_set[fd].events & EPOLLIN) == EPOLLIN)) || 
+	if (((dir == DIR_RD) && ((epfd_set[fd].events & EPOLLIN) == EPOLLIN)) ||
 			((dir == DIR_WR) && ((epfd_set[fd].events & EPOLLOUT) == EPOLLOUT)))
 		return 1;
 

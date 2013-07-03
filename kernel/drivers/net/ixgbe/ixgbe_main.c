@@ -3435,13 +3435,11 @@ static void ixgbe_setup_mrqc(struct ixgbe_adapter *adapter)
 			  0x6A3E67EA, 0x14364D17, 0x3BED200D};
 	u32 mrqc = 0, reta = 0;
 	u32 rxcsum;
-	int i, j, offset, rss_limit;
+	int i, j;
 	int maxq = adapter->ring_feature[RING_F_RSS].indices;
 	int mask;
 	u8 tcs = netdev_get_num_tc(adapter->netdev);
 
-	pr_info("maxq=%d,num_tx_queues=%d, tcs=%u\n",
-			maxq, adapter->num_tx_queues, tcs);
 #ifdef HAVE_MQPRIO
 	if (tcs)
 		maxq = min(maxq, adapter->num_tx_queues / tcs);
@@ -3451,19 +3449,15 @@ static void ixgbe_setup_mrqc(struct ixgbe_adapter *adapter)
 	for (i = 0; i < 10; i++)
 		IXGBE_WRITE_REG(hw, IXGBE_RSSRK(i), seed[i]);
 
-	rss_limit = min_t(int, adapter->num_tx_queues,
-				IXGBE_MAX_RSS_INDICES);
-	offset = (rss_limit > maxq) ? (rss_limit - maxq) : 0;
 	/* Fill out redirection table */
-	for (i = 0, j = offset; i < 128; i++, j++) {
-		if (j == (maxq + offset))
-			j = offset;
+	for (i = 0, j = 0; i < 128; i++, j++) {
+		if (j == maxq)
+			j = 0;
 		/* reta = 4-byte sliding window of
 		 * 0x00..(indices-1)(indices-1)00..etc. */
 		reta = (reta << 8) | (j * 0x11);
-		if ((i & 3) == 3) {
+		if ((i & 3) == 3)
 			IXGBE_WRITE_REG(hw, IXGBE_RETA(i >> 2), reta);
-		}
 	}
 
 	/* Disable indicating checksum in descriptor, enables RSS hash */
@@ -8731,8 +8725,7 @@ static u16 ixgbe_select_queue(struct net_device *dev, struct sk_buff *skb)
 	}
 #endif /* IXGBE_FCOE */
 
-	if (adapter->flags & (IXGBE_FLAG_FDIR_HASH_CAPABLE |
-				IXGBE_FLAG_FDIR_PERFECT_CAPABLE)) {
+	if (adapter->flags & IXGBE_FLAG_FDIR_HASH_CAPABLE) {
 		while (unlikely(txq >= dev->real_num_tx_queues))
 			txq -= dev->real_num_tx_queues;
 		return txq;

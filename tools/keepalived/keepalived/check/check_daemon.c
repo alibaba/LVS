@@ -47,13 +47,13 @@ extern char *checkers_pidfile;
 static void
 stop_check(void)
 {
+	if (!(debug & 16))
+		clear_services();
 	/* Destroy master thread */
 	signal_handler_destroy();
 	thread_destroy_master(master);
 	free_checkers_queue();
 	free_ssl();
-	if (!(debug & 16))
-		clear_services();
 	ipvs_stop();
 
 	/* Stop daemon */

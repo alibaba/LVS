@@ -76,8 +76,12 @@ notify_exec(char *cmd)
 		return 0;
 
 	signal_handler_destroy();
-	closeall(0);
+	//closeall(0);
 
+	/* attach fd 0,1,2 to /dev/null */
+	close(0);
+	close(1);
+	close(2);
 	open("/dev/null", O_RDWR);
 	ret = dup(0);
 	ret = dup(0);

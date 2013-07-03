@@ -286,6 +286,12 @@ syn_proxy_handler(vector strvec)
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
 	vs->syn_proxy = 1;
 }
+static void
+bind_dev_handler(vector strvec)
+{
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	vs->vip_bind_dev = set_value(strvec);
+}
 
 vector
 check_init_keywords(void)
@@ -345,6 +351,7 @@ check_init_keywords(void)
 
 	install_keyword("laddr_group_name", &laddr_gname_handler);
 	install_keyword("syn_proxy", &syn_proxy_handler);
-	
+	install_keyword("vip_bind_dev", &bind_dev_handler);
+
 	return keywords;
 }

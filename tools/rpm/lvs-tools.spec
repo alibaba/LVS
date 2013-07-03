@@ -5,10 +5,13 @@ Summary: tools for manage lvs, include keepalived, ipvsadm and quagga
 Group: Taobao/Common
 URL: %{_svn_path} 
 %define _prefix /usr
-#Source:        %{name}-%{version}.tar.gz
+%define _sbindir_sys /sbin
+Source:        %{name}-%{version}.tar.gz
 License:       GPL
 BuildRequires: kernel, kernel-devel, kernel-headers
 BuildRequires: openssl-devel
+BuildRequires: libnl-devel
+Requires: libnl
 #BuildRoot:     %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 %description
@@ -60,6 +63,7 @@ cd ../ipvsadm/
 cd ../quagga/
 %makeinstall
 mkdir -p %{buildroot}/var/run/quagga
+mkdir -p %{buildroot}/var/log/quagga
 
 %post
 /sbin/chkconfig --add ipvsadm
@@ -69,7 +73,11 @@ exit 0
 %preun
 /sbin/chkconfig --del ipvsadm
 /sbin/chkconfig --del keepalived
-rmdir /var/run/quagga
+exit 0
+
+%postun
+rm -rf /var/run/quagga
+rm -rf /var/log/quagga
 exit 0
 
 %clean
@@ -81,7 +89,7 @@ exit 0
 # /usr/
 %{_bindir}/genhash
 %{_sbindir}/keepalived
-%{_initrddir}/keepalived
+#%{_initrddir}/keepalived
 %config(noreplace) %{_sysconfdir}/sysconfig/keepalived
 %dir %{_sysconfdir}/keepalived/
 %config(noreplace) %{_sysconfdir}/keepalived/*
@@ -92,8 +100,8 @@ exit 0
 
 #%defattr(-,root,root)
 #%doc %{_prefix}/README
-%config %{_sysconfdir}/rc.d/init.d/ipvsadm
-/sbin/ipvsadm*
+#%config %{_sysconfdir}/rc.d/init.d/ipvsadm
+%{_sbindir_sys}/ipvsadm*
 %doc %{_prefix}/man/man8/ipvsadm*
 
 %defattr(-,root,root)
@@ -102,7 +110,7 @@ exit 0
 #%doc doc/mpls
 #%doc ChangeLog INSTALL NEWS README REPORTING-BUGS SERVICES TODO
 #%dir %attr(750,root,root) %{_sysconfdir}
-#%dir %attr(750,root,root) /var/log/quagga
+%dir %attr(750,root,root) /var/log/quagga
 #%dir %attr(755,root,root) /usr/share/info
 %dir %attr(750,root,root) /var/run/quagga
 #%{_infodir}/*info*
@@ -113,15 +121,15 @@ exit 0
 #%{_sbindir}/bgpd
 #%{_sbindir}/watchquagga
 #%{_sbindir}/ripngd
-#%{_sbindir}/ospf6d
+%{_sbindir}/ospf6d
 #%{_sbindir}/isisd
 #%dir %attr(-,root,root) %{_libdir}
 #%dir %{_libdir}
 %{_libdir}/lib*.so
 %{_libdir}/lib*.so.*
-#%config /etc/quagga/[!v]*
+#%config(noreplace) %{_sysconfdir}/quagga/[!v]*
 %config %{_sysconfdir}/rc.d/init.d/*
-#%config(noreplace) /etc/sysconfig/quagga
+#%config(noreplace) %{_sysconfdir}/sysconfig/quagga
 #%config(noreplace) /etc/pam.d/quagga
 #%config(noreplace) %attr(640,root,root) /etc/logrotate.d/*
 

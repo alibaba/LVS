@@ -2,8 +2,6 @@
 #include <linux/kernel.h>
 #include <linux/tcp.h>
 #include <linux/if_arp.h>
-#include <linux/cryptohash.h>
-#include <linux/random.h>
 
 #include <net/ip.h>
 #include <net/tcp.h>
@@ -22,327 +20,10 @@
 #include <net/ip_vs.h>
 #include <net/ip_vs_synproxy.h>
 
-/*
- * syncookies using MD5 algorithm
- */
-static u32 net_secret[2][MD5_MESSAGE_BYTES / 4] ____cacheline_aligned;
-
-int ip_vs_net_secret_init(void)
-{
-        get_random_bytes(net_secret, sizeof(net_secret));
-        return 0;
-}
-
-#define COOKIEBITS 24   /* Upper bits store count */
-#define COOKIEMASK (((__u32)1 << COOKIEBITS) - 1)
-
-static u32 cookie_hash(__be32 saddr, __be32 daddr, __be16 sport, __be16 dport,
-                        u32 count, int c)
-{
-        u32 hash[MD5_DIGEST_WORDS];
-        hash[0] = (__force u32)saddr;
-        hash[1] = (__force u32)daddr;
-        hash[2] = ((__force u16)sport << 16) + (__force u16)dport;
-        hash[3] = count;
-
-        md5_transform(hash, net_secret[c]);
-
-        return hash[0];
-}
-
-static __u32 secure_tcp_syn_cookie(__be32 saddr, __be32 daddr, __be16 sport,
-                                   __be16 dport, __u32 sseq, __u32 count,
-                                   __u32 data)
-{
-        /*
-         * Compute the secure sequence number.
-         * The output should be:
-         *   HASH(sec1,saddr,sport,daddr,dport,sec1) + sseq + (count * 2^24)
-         *      + (HASH(sec2,saddr,sport,daddr,dport,count,sec2) % 2^24).
-         * Where sseq is their sequence number and count increases every
-         * minute by 1.
-         * As an extra hack, we add a small "data" value that encodes the
-         * MSS into the second hash value.
-         */
-
-        return (cookie_hash(saddr, daddr, sport, dport, 0, 0) +
-                sseq + (count << COOKIEBITS) +
-                ((cookie_hash(saddr, daddr, sport, dport, count, 1) + data)
-                 & COOKIEMASK));
-}
-
-/*
- * This retrieves the small "data" value from the syncookie.
- * If the syncookie is bad, the data returned will be out of
- * range.  This must be checked by the caller.
- *
- * The count value used to generate the cookie must be within
- * "maxdiff" if the current (passed-in) "count".  The return value
- * is (__u32)-1 if this test fails.
- */
-static __u32 check_tcp_syn_cookie(__u32 cookie, __be32 saddr, __be32 daddr,
-                                  __be16 sport, __be16 dport, __u32 sseq,
-                                  __u32 count, __u32 maxdiff)
-{
-        __u32 diff;
-
-        /* Strip away the layers from the cookie */
-        cookie -= cookie_hash(saddr, daddr, sport, dport, 0, 0) + sseq;
-
-        /* Cookie is now reduced to (count * 2^24) ^ (hash % 2^24) */
-        diff = (count - (cookie >> COOKIEBITS)) & ((__u32) - 1 >> COOKIEBITS);
-        if (diff >= maxdiff)
-                return (__u32)-1;
-
-        return (cookie -
-                cookie_hash(saddr, daddr, sport, dport, count - diff, 1))
-                & COOKIEMASK;   /* Leaving the data behind */
-}
-
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-static u32 cookie_hash_v6(struct in6_addr *saddr, struct in6_addr *daddr,
-                       __be16 sport, __be16 dport, u32 count, int c)
-{
-        u32 secret[MD5_MESSAGE_BYTES / 4];
-        u32 hash[MD5_DIGEST_WORDS];
-        u32 i;
-
-        memcpy(hash, saddr, 16);
-        for (i = 0; i < 4; i++)
-                secret[i] = net_secret[c][i] + ((__force u32 *)daddr)[i];
-
-        secret[4] = net_secret[c][4] +
-                (((__force u16)sport << 16) + (__force u16)dport);
-
-        secret[5] = net_secret[c][5] + count;
-
-        for (i = 6; i < MD5_MESSAGE_BYTES / 4; i++)
-                secret[i] = net_secret[c][i];
-
-        md5_transform(hash, secret);
-
-        return hash[0];
-}
-
-static __u32 secure_tcp_syn_cookie_v6(struct in6_addr *saddr, struct in6_addr *daddr,
-                                   __be16 sport, __be16 dport, __u32 sseq,
-                                   __u32 count, __u32 data)
-{
-        return (cookie_hash_v6(saddr, daddr, sport, dport, 0, 0) +
-                sseq + (count << COOKIEBITS) +
-                ((cookie_hash_v6(saddr, daddr, sport, dport, count, 1) + data)
-                & COOKIEMASK));
-}
-
-static __u32 check_tcp_syn_cookie_v6(__u32 cookie, struct in6_addr *saddr,
-                                  struct in6_addr *daddr, __be16 sport,
-                                  __be16 dport, __u32 sseq, __u32 count,
-                                  __u32 maxdiff)
-{
-        __u32 diff;
-
-        cookie -= cookie_hash_v6(saddr, daddr, sport, dport, 0, 0) + sseq;
-
-        diff = (count - (cookie >> COOKIEBITS)) & ((__u32) -1 >> COOKIEBITS);
-        if (diff >= maxdiff)
-                return (__u32)-1;
-
-        return (cookie -
-                cookie_hash_v6(saddr, daddr, sport, dport, count - diff, 1))
-                & COOKIEMASK;
-}
-#endif
-
-/*
- * This table has to be sorted and terminated with (__u16)-1.
- * XXX generate a better table.
- * Unresolved Issues: HIPPI with a 64k MSS is not well supported.
- */
-static __u16 const msstab[] = {
-        64 - 1,
-        256 - 1,
-        512 - 1,
-        536 - 1,
-        1024 - 1,
-        1280 - 1,
-        1440 - 1,
-        1452 - 1,
-        1460 - 1,
-        4312 - 1,
-        (__u16)-1
-};
-/* The number doesn't include the -1 terminator */
-#define NUM_MSS (ARRAY_SIZE(msstab) - 1)
-
-/*
- * This (misnamed) value is the age of syncookie which is permitted.
- * Its ideal value should be dependent on TCP_TIMEOUT_INIT and
- * sysctl_tcp_retries1. It's a rather complicated formula (exponential
- * backoff) to compute at runtime so it's currently hardcoded here.
- */
-#define COUNTER_TRIES 4
-
-/*
- * Generate a syncookie for ip_vs module.
- * Besides mss, we store additional tcp options in cookie "data".
- *
- * Cookie "data" format:
- * |[21][20][19-16][15-0]|
- * [21] SACKOK
- * [20] TimeStampOK
- * [19-16] snd_wscale
- * [15-12] MSSIND
- */
-static __u32 syn_proxy_cookie_v4_init_sequence(struct sk_buff *skb,
-                                             struct ip_vs_synproxy_opt *opts)
-{
-        const struct iphdr *iph = ip_hdr(skb);
-        const struct tcphdr *th = tcp_hdr(skb);
-        int mssind;
-        const __u16 mss = opts->mss_clamp;
-        __u32 data = 0;
-
-        /* XXX sort msstab[] by probability?  Binary search? */
-        for (mssind = 0; mss > msstab[mssind + 1]; mssind++)
-                ;
-        opts->mss_clamp = msstab[mssind] + 1;
-
-        data = ((mssind & 0x0f) << IP_VS_SYNPROXY_MSS_BITS);
-        data |= opts->sack_ok << IP_VS_SYNPROXY_SACKOK_BIT;
-        data |= opts->tstamp_ok << IP_VS_SYNPROXY_TSOK_BIT;
-        data |= ((opts->snd_wscale & 0x0f) << IP_VS_SYNPROXY_SND_WSCALE_BITS);
-
-        return secure_tcp_syn_cookie(iph->saddr, iph->daddr,
-                                     th->source, th->dest, ntohl(th->seq),
-                                     jiffies / (HZ * 60), data);
-}
-
-/*
- * when syn_proxy_cookie_v4_init_sequence is used, we check
- * cookie as follow:
- *  1. mssind check.
- *  2. get sack/timestamp/wscale options.
- */
-static int syn_proxy_v4_cookie_check(struct sk_buff *skb, __u32 cookie,
-                              struct ip_vs_synproxy_opt *opt)
-{
-        const struct iphdr *iph = ip_hdr(skb);
-        const struct tcphdr *th = tcp_hdr(skb);
-        __u32 seq = ntohl(th->seq) - 1;
-        __u32 mssind;
-        int   ret = 0;
-        __u32 res = check_tcp_syn_cookie(cookie, iph->saddr, iph->daddr,
-                                         th->source, th->dest, seq,
-                                         jiffies / (HZ * 60),
-                                         COUNTER_TRIES);
-
-        if(res == (__u32)-1) /* count is invalid, jiffies' >> jiffies */
-                goto out;
-
-        mssind = (res & IP_VS_SYNPROXY_MSS_MASK) >> IP_VS_SYNPROXY_MSS_BITS;
-
-        memset(opt, 0, sizeof(struct ip_vs_synproxy_opt));
-        if ((mssind < NUM_MSS) && ((res & IP_VS_SYNPROXY_OTHER_MASK) == 0)) {
-                opt->mss_clamp = msstab[mssind] + 1;
-                opt->sack_ok = (res & IP_VS_SYNPROXY_SACKOK_MASK) >>
-                                        IP_VS_SYNPROXY_SACKOK_BIT;
-                opt->tstamp_ok = (res & IP_VS_SYNPROXY_TSOK_MASK) >>
-                                        IP_VS_SYNPROXY_TSOK_BIT;
-                opt->snd_wscale = (res & IP_VS_SYNPROXY_SND_WSCALE_MASK) >>
-                                        IP_VS_SYNPROXY_SND_WSCALE_BITS;
-                if (opt->snd_wscale > 0 &&
-                    opt->snd_wscale <= IP_VS_SYNPROXY_WSCALE_MAX)
-                        opt->wscale_ok = 1;
-                else if (opt->snd_wscale == 0)
-                        opt->wscale_ok = 0;
-                else
-                        goto out;
-
-                ret = 1;
-        }
-
-out:    return ret;
-}
-
-#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-static __u32 syn_proxy_cookie_v6_init_sequence(struct sk_buff *skb,
-                                             struct ip_vs_synproxy_opt *opts)
-{
-        struct ipv6hdr *iph = ipv6_hdr(skb);
-        const struct tcphdr *th = tcp_hdr(skb);
-        int mssind;
-        const __u16 mss = opts->mss_clamp;
-        __u32 data = 0;
-
-        /* XXX sort msstab[] by probability?  Binary search? */
-        for (mssind = 0; mss > msstab[mssind + 1]; mssind++)
-                ;
-        opts->mss_clamp = msstab[mssind] + 1;
-
-        data = ((mssind & 0x0f) << IP_VS_SYNPROXY_MSS_BITS);
-        data |= opts->sack_ok << IP_VS_SYNPROXY_SACKOK_BIT;
-        data |= opts->tstamp_ok << IP_VS_SYNPROXY_TSOK_BIT;
-        data |= ((opts->snd_wscale & 0x0f) << IP_VS_SYNPROXY_SND_WSCALE_BITS);
-
-        return secure_tcp_syn_cookie_v6(&iph->saddr, &iph->daddr,
-                                     th->source, th->dest, ntohl(th->seq),
-                                     jiffies / (HZ * 60), data);
-}
-
-int syn_proxy_v6_cookie_check(struct sk_buff * skb, __u32 cookie,
-                              struct ip_vs_synproxy_opt * opt)
-{
-        struct ipv6hdr *iph = ipv6_hdr(skb);
-        const struct tcphdr *th = tcp_hdr(skb);
-        __u32 seq = ntohl(th->seq) - 1;
-        __u32 mssind;
-        int   ret = 0;
-        __u32 res = check_tcp_syn_cookie_v6(cookie, &iph->saddr, &iph->daddr,
-                                         th->source, th->dest, seq,
-                                         jiffies / (HZ * 60),
-                                         COUNTER_TRIES);
-
-        if(res == (__u32)-1) /* count is invalid, jiffies' >> jiffies */
-                goto out;
-
-        mssind = (res & IP_VS_SYNPROXY_MSS_MASK) >> IP_VS_SYNPROXY_MSS_BITS;
-
-        memset(opt, 0, sizeof(struct ip_vs_synproxy_opt));
-
-        if ((mssind < NUM_MSS) && ((res & IP_VS_SYNPROXY_OTHER_MASK) == 0)) {
-                opt->mss_clamp = msstab[mssind] + 1;
-                opt->sack_ok = (res & IP_VS_SYNPROXY_SACKOK_MASK) >>
-                                        IP_VS_SYNPROXY_SACKOK_BIT;
-                opt->tstamp_ok = (res & IP_VS_SYNPROXY_TSOK_MASK) >>
-                                        IP_VS_SYNPROXY_TSOK_BIT;
-                opt->snd_wscale = (res & IP_VS_SYNPROXY_SND_WSCALE_MASK) >>
-                                        IP_VS_SYNPROXY_SND_WSCALE_BITS;
-                if (opt->snd_wscale > 0 &&
-                    opt->snd_wscale <= IP_VS_SYNPROXY_WSCALE_MAX)
-                        opt->wscale_ok = 1;
-                else if (opt->snd_wscale == 0)
-                        opt->wscale_ok = 0;
-                else
-                        goto out;
-
-                ret = 1;
-        }
-
-out:    return ret;
-}
-#endif
-
-/*
- * synproxy implementation
- */
-
-
 static inline void
 syn_proxy_seq_csum_update(struct tcphdr *tcph, __u32 old_seq, __u32 new_seq)
 {
-	/* do checksum later */
-	if (!sysctl_ip_vs_csum_offload)
-		tcph->check = csum_fold(ip_vs_check_diff4(old_seq, new_seq,
+	tcph->check = csum_fold(ip_vs_check_diff4(old_seq, new_seq,
 						  ~csum_unfold(tcph->check)));
 }
 
@@ -484,10 +165,10 @@ syn_proxy_reuse_skb(int af, struct sk_buff *skb, struct ip_vs_synproxy_opt *opt)
 	skb_set_transport_header(skb, tcphoff);
 #ifdef CONFIG_IP_VS_IPV6
 	if (af == AF_INET6)
-		isn = syn_proxy_cookie_v6_init_sequence(skb, opt);
+		isn = ip_vs_synproxy_cookie_v6_init_sequence(skb, opt);
 	else
 #endif
-		isn = syn_proxy_cookie_v4_init_sequence(skb, opt);
+		isn = ip_vs_synproxy_cookie_v4_init_sequence(skb, opt);
 
 	/* Set syn-ack flag
 	 * the tcp opt in syn/ack packet : 00010010 = 0x12
@@ -573,16 +254,7 @@ ip_vs_synproxy_syn_rcv(int af, struct sk_buff *skb,
 	    (svc =
 	     ip_vs_service_get(af, skb->mark, iph->protocol, &iph->daddr,
 			       th->dest))
-	    && (svc->flags & IP_VS_SVC_F_SYNPROXY)) {
-		/*
-		 * if service's weight is zero (no active realserver),
-		 * then do nothing and drop the packet.
-		 */
-		if(svc->weight == 0) {
-			IP_VS_INC_ESTATS(ip_vs_esmib, SYNPROXY_NO_DEST);
-			ip_vs_service_put(svc);
-			goto syn_rcv_out;
-		}
+	    && (svc->flags & IP_VS_CONN_F_SYNPROXY)) {
 		// release service here, because don't use it any all.
 		ip_vs_service_put(svc);
 
@@ -908,7 +580,7 @@ ip_vs_synproxy_ack_rcv(int af, struct sk_buff *skb, struct tcphdr *th,
 		skb_set_transport_header(skb, iph->len);
 #ifdef CONFIG_IP_VS_IPV6
 		if (af == AF_INET6) {
-			res_cookie_check = syn_proxy_v6_cookie_check(skb,
+			res_cookie_check = ip_vs_synproxy_v6_cookie_check(skb,
 									  ntohl
 									  (th->
 									   ack_seq)
@@ -917,7 +589,7 @@ ip_vs_synproxy_ack_rcv(int af, struct sk_buff *skb, struct tcphdr *th,
 		} else
 #endif
 		{
-			res_cookie_check = syn_proxy_v4_cookie_check(skb,
+			res_cookie_check = ip_vs_synproxy_v4_cookie_check(skb,
 									  ntohl
 									  (th->
 									   ack_seq)
@@ -951,13 +623,6 @@ ip_vs_synproxy_ack_rcv(int af, struct sk_buff *skb, struct tcphdr *th,
 			*verdict = ip_vs_leave(svc, skb, pp);
 			return 0;
 		}
-
-		/*
-		 * Set private establish state timeout into cp from svc,
-		 * due cp may use its user establish state timeout
-		 * different from sysctl_ip_vs_tcp_timeouts
-		 */
-		(*cpp)->est_timeout = svc->est_timeout;
 
 		/*
 		 * Release service, we don't need it any more.
@@ -1090,34 +755,6 @@ void ip_vs_synproxy_dnat_handler(struct tcphdr *tcph, struct ip_vs_seq *sp_seq)
 	}
 }
 
-static inline void
-ip_vs_synproxy_save_fast_xmit_info(struct sk_buff *skb, struct ip_vs_conn *cp)
-{
-	/* Save info for L2 fast xmit */
-	if(sysctl_ip_vs_fast_xmit_inside && skb->dev &&
-				likely(skb->dev->type == ARPHRD_ETHER) &&
-				skb_mac_header_was_set(skb)) {
-		struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
-
-		if(likely(cp->dev_inside == NULL)) {
-			cp->dev_inside = skb->dev;
-			dev_hold(cp->dev_inside);
-		}
-
-		if (unlikely(cp->dev_inside != skb->dev)) {
-			dev_put(cp->dev_inside);
-			cp->dev_inside = skb->dev;
-			dev_hold(cp->dev_inside);
-		}
-
-		memcpy(cp->src_hwaddr_inside, eth->h_source, ETH_ALEN);
-		memcpy(cp->dst_hwaddr_inside, eth->h_dest, ETH_ALEN);
-		IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_SYNPROXY_SAVE_INSIDE);
-		IP_VS_DBG_RL("synproxy_save_fast_xmit netdevice:%s\n",
-						netdev_name(skb->dev));
-	}
-}
-
 /*
  * Syn-proxy step 3 logic: receive syn-ack from rs
  * Update syn_proxy_seq.delta and send stored ack skbs
@@ -1154,8 +791,8 @@ ip_vs_synproxy_synack_rcv(struct sk_buff *skb, struct ip_vs_conn *cp,
 	    cp->state == IP_VS_TCP_S_SYN_SENT) {
 		cp->syn_proxy_seq.delta =
 		    htonl(cp->syn_proxy_seq.init_seq) - htonl(th->seq);
-		cp->state = IP_VS_TCP_S_ESTABLISHED;
-		cp->timeout = cp->est_timeout;
+		cp->timeout = pp->timeout_table[cp->state =
+						IP_VS_TCP_S_ESTABLISHED];
 		if (dest) {
 			atomic_inc(&dest->activeconns);
 			atomic_dec(&dest->inactconns);
@@ -1171,8 +808,6 @@ ip_vs_synproxy_synack_rcv(struct sk_buff *skb, struct ip_vs_conn *cp,
 			IP_VS_DBG_RL("port:%u->%u", ntohs(th->source),
 				     ntohs(th->dest));
 		}
-
-		ip_vs_synproxy_save_fast_xmit_info(skb, cp);
 
 		/* First: free stored syn skb */
 		if ((tmp_skb = xchg(&cp->syn_skb, NULL)) != NULL) {
@@ -1313,7 +948,7 @@ ip_vs_synproxy_reuse_conn(int af, struct sk_buff *skb,
 		skb_set_transport_header(skb, iph->len);
 #ifdef CONFIG_IP_VS_IPV6
 		if (af == AF_INET6) {
-			res_cookie_check = syn_proxy_v6_cookie_check(skb,
+			res_cookie_check = ip_vs_synproxy_v6_cookie_check(skb,
 									  ntohl
 									  (th->
 									   ack_seq)
@@ -1322,7 +957,7 @@ ip_vs_synproxy_reuse_conn(int af, struct sk_buff *skb,
 		} else
 #endif
 		{
-			res_cookie_check = syn_proxy_v4_cookie_check(skb,
+			res_cookie_check = ip_vs_synproxy_v4_cookie_check(skb,
 									  ntohl
 									  (th->
 									   ack_seq)
