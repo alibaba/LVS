@@ -239,6 +239,7 @@ static int ipvs_nl_fill_service_attr(struct nl_msg *msg, ipvs_service_t *svc)
 	NLA_PUT(msg, IPVS_SVC_ATTR_FLAGS, sizeof(flags), &flags);
 	NLA_PUT_U32(msg, IPVS_SVC_ATTR_TIMEOUT, svc->timeout);
 	NLA_PUT_U32(msg, IPVS_SVC_ATTR_NETMASK, svc->netmask);
+	NLA_PUT_U32(msg, IPVS_SVC_ATTR_EST_TIMEOUT, svc->est_timeout);
 
 	nla_nest_end(msg, nl_service);
 	return 0;
@@ -267,6 +268,21 @@ int ipvs_add_service(ipvs_service_t *svc)
 			  sizeof(struct ip_vs_service_kern));
 }
 
+void ipvs_service_entry_2_user(const ipvs_service_entry_t *entry, ipvs_service_t *user)
+{
+	user->protocol  = entry->protocol;
+	user->__addr_v4 = entry->__addr_v4;
+	user->port      = entry->port;
+	user->fwmark    = entry->fwmark;
+	strcpy(user->sched_name, entry->sched_name);
+	user->flags     = entry->flags;
+	user->timeout   = entry->timeout;
+	user->netmask   = entry->netmask;
+	user->af        = entry->af;
+	user->addr      = entry->addr;
+	strcpy(user->pe_name, entry->pe_name);
+	user->est_timeout = entry->est_timeout;
+}
 
 int ipvs_update_service(ipvs_service_t *svc)
 {
@@ -313,10 +329,10 @@ int ipvs_update_service_by_options(ipvs_service_t *svc, unsigned int options)
 	}
 
 	if( options & OPT_SYNPROXY ) {
-		if( svc->flags & IP_VS_CONN_F_SYNPROXY ) {
-			user.flags |= IP_VS_CONN_F_SYNPROXY;
+		if( svc->flags & IP_VS_SVC_F_SYNPROXY ) {
+			user.flags |= IP_VS_SVC_F_SYNPROXY;
 		} else {
-			user.flags &= ~IP_VS_CONN_F_SYNPROXY;
+			user.flags &= ~IP_VS_SVC_F_SYNPROXY;
 		}
 	}
 
@@ -324,31 +340,11 @@ int ipvs_update_service_by_options(ipvs_service_t *svc, unsigned int options)
 		user.flags |= IP_VS_SVC_F_ONEPACKET;
 	}
 
-	return ipvs_update_service(&user);
-}
-
-int ipvs_update_service_synproxy(ipvs_service_t *svc , int enable)
-{
-	ipvs_service_entry_t *entry;
-
-	if (!(entry = ipvs_get_service(svc->fwmark, svc->af, svc->protocol,
-				       svc->addr, svc->port))) {
-		fprintf(stderr, "%s\n", ipvs_strerror(errno));
-		exit(1);
+	if( options & OPT_VS_EST_TIMEOUT ) {
+		user.est_timeout = svc->est_timeout;
 	}
-	
-	strcpy(svc->sched_name , entry->sched_name);
-	strcpy(svc->pe_name , entry->pe_name);
-	svc->flags = entry->flags;
-	svc->timeout = entry->timeout;
-	svc->netmask = entry->netmask;
-	
-	if(enable)
-		svc->flags = svc->flags | IP_VS_CONN_F_SYNPROXY;
-	else
-		svc->flags = svc->flags & (~IP_VS_CONN_F_SYNPROXY);
-	
-	return ipvs_update_service(svc);	
+
+	return ipvs_update_service(&user);
 }
 
 int ipvs_del_service(ipvs_service_t *svc)
@@ -765,6 +761,8 @@ static int ipvs_services_parse_cb(struct nl_msg *msg, void *arg)
 	get->entrytable[i].timeout = nla_get_u32(svc_attrs[IPVS_SVC_ATTR_TIMEOUT]);
 	nla_memcpy(&flags, svc_attrs[IPVS_SVC_ATTR_FLAGS], sizeof(flags));
 	get->entrytable[i].flags = flags.flags & flags.mask;
+	if(svc_attrs[IPVS_SVC_ATTR_EST_TIMEOUT]) /* Be compatible with different version of ipvs kernel */
+		get->entrytable[i].est_timeout= nla_get_u32(svc_attrs[IPVS_SVC_ATTR_EST_TIMEOUT]);
 
 	if (ipvs_parse_stats(&(get->entrytable[i].stats),
 			     svc_attrs[IPVS_SVC_ATTR_STATS]) != 0)
@@ -1450,21 +1448,5 @@ const char *ipvs_strerror(int err)
 	}
 
 	return strerror(err);
-}
-
-
-void ipvs_service_entry_2_user(const ipvs_service_entry_t *entry, ipvs_service_t *user)
-{
-	user->protocol  = entry->protocol;
-	user->__addr_v4 = entry->__addr_v4;
-	user->port      = entry->port;
-	user->fwmark    = entry->fwmark;
-	strcpy(user->sched_name, entry->sched_name);
-	user->flags     = entry->flags;
-	user->timeout   = entry->timeout;
-	user->netmask   = entry->netmask;
-	user->af        = entry->af;
-	user->addr      = entry->addr;
-	strcpy(user->pe_name, entry->pe_name);
 }
 

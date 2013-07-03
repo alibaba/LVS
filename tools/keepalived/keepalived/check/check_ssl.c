@@ -290,7 +290,7 @@ ssl_read_thread(thread_t * thread)
 
 		if (r && !req->extracted) {
 			/* check if server is currently alive */
-			if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+			if (svr_checker_up(checker->id, checker->rs)) {
 				smtp_alert(checker->rs, NULL, NULL,
 					   "DOWN",
 					   "=> SSL CHECK failed on service"

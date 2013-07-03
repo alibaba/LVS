@@ -38,6 +38,92 @@ static struct {
 	char buf[256];
 } req;
 
+vip_data *
+get_vip_by_addr(struct sockaddr_storage *addr)
+{
+	vip_data *ip_entry;
+	element e;
+
+	for (e = LIST_HEAD(vip_queue); e; ELEMENT_NEXT(e)) {
+		ip_entry = ELEMENT_DATA(e);
+		if (sockstorage_equal(&ip_entry->addr, addr))
+			return ip_entry;
+	}
+
+	return NULL;
+}
+
+static int
+vip_check(struct nlmsghdr *n)
+{
+	struct ifaddrmsg *ifa;
+	vip_data *ip_entry;
+	int ret = 0;
+	struct sockaddr_storage addr;
+
+	/* vip_queue has not been init */
+	if (vip_queue == NULL)
+		return 1;
+
+	ifa = NLMSG_DATA(n);
+	addr.ss_family = ifa->ifa_family;
+	if (ifa->ifa_family == AF_INET) {
+		((struct sockaddr_in *) &addr)->sin_addr =
+		*(struct in_addr *)RTA_DATA((void*)n + NLMSG_SPACE(sizeof(struct ifaddrmsg)));
+		((struct sockaddr_in *) &addr)->sin_port = 0;	/* clear port */
+	} else {
+		((struct sockaddr_in6 *) &addr)->sin6_addr =
+		*(struct in6_addr *)RTA_DATA((void*)n + NLMSG_SPACE(sizeof(struct ifaddrmsg)));
+		((struct sockaddr_in6 *) &addr)->sin6_port = 0;
+	}
+
+	ip_entry = get_vip_by_addr(&addr);
+	if (ip_entry == NULL) {
+		log_message(LOG_INFO,"unexpected vip:%s"
+				,inet_sockaddrtos(&addr));
+		return ret;
+	}
+
+	switch(n->nlmsg_type) {
+	/* add vip */
+	case RTM_NEWADDR:
+		if (ip_entry->set_cnt < ip_entry->entry_cnt) {
+			ret = (ip_entry->set_cnt? 0 : 1);
+			ip_entry->set_cnt++;
+			log_message(LOG_INFO, "%s VIP %s"
+					,ret ? "ADD":"HOLD"
+					,inet_sockaddrtos(&addr));
+		} else {
+			ret = 0;
+			log_message(LOG_INFO,"vip=%s has been set too many times(%d)"
+					,inet_sockaddrtos(&addr)
+					,ip_entry->entry_cnt);
+		}
+		break;
+	/* del vip */
+	case RTM_DELADDR:
+		if (ip_entry->set_cnt > 0 ) {
+			ip_entry->set_cnt--;
+			/* reference counter is 0, then del vip */
+			ret = (ip_entry->set_cnt ? 0 : 1);
+			log_message(LOG_INFO, "%s VIP %s"
+					,ret ? "DEL":"UNHOLD"
+					,inet_sockaddrtos(&addr));
+		} else {
+			ret = 0;
+			log_message(LOG_INFO,"vip=%s has been deleted"
+					,inet_sockaddrtos(&addr));
+		}
+		break;
+	default:
+		log_message(LOG_INFO,"unknown opcode:%d , vip=%s"
+				,n->nlmsg_type
+				,inet_sockaddrtos(&addr));
+	}
+
+	return ret;
+}
+
 /* send message to netlink kernel socket, ignore response */
 int
 netlink_cmd(struct nl_handle *nl, struct nlmsghdr *n)
@@ -46,6 +132,10 @@ netlink_cmd(struct nl_handle *nl, struct nlmsghdr *n)
 	struct sockaddr_nl snl;
 	struct iovec iov = { (void *) n, n->nlmsg_len };
 	struct msghdr msg = { (void *) &snl, sizeof snl, &iov, 1, NULL, 0, 0 };
+
+	status = vip_check(n);
+	if (status <= 0)
+		return status;
 
 	memset(&snl, 0, sizeof snl);
 	snl.nl_family = AF_NETLINK;
@@ -159,8 +249,6 @@ netlink_group_vipaddress(list vs_group, char * vsgname, int cmd)
 						sizeof(struct in_addr));
 		}
 
-		log_message(LOG_INFO, "%s VIP %s",
-					cmd ? "ADD":"DEL", inet_sockaddrtos(addr));
 		if (netlink_cmd(&nl_cmd, &req.n) < 0)
 			log_message(LOG_INFO, "%s VIP = %s failed",
 						cmd ? "ADD":"DEL",
@@ -225,10 +313,6 @@ netlink_vipaddress(list vs_group, virtual_server *vs, int cmd)
 						sizeof(struct in_addr));
 		}
 
-		log_message(LOG_INFO, "%s VIP %s to %s",
-					cmd ? "ADD":"DEL",
-					inet_sockaddrtos(&vs->addr),
-					vs->vip_bind_dev);
 		if (netlink_cmd(&nl_cmd, &req.n) < 0)
 			log_message(LOG_INFO, "%s VIP = %s failed",
 						cmd ? "ADD":"DEL",
@@ -280,10 +364,78 @@ netlink_group_remove_entry(virtual_server *vs, virtual_server_group_entry *vsge)
 						sizeof(struct in_addr));
 		}
 
-		log_message(LOG_INFO, "DEL VIP %s", inet_sockaddrtos(addr));
 		if (netlink_cmd(&nl_cmd, &req.n) < 0)
 			log_message(LOG_INFO, "DEL VIP = %s failed",
 						inet_sockaddrtos(addr));
+	}
+}
+
+/* add the vip of new vsg_entry, in reload mode only */
+void
+add_new_vsge_vip(list vs_group, virtual_server *vs)
+{
+	unsigned int ifa_idx;
+	virtual_server_group *vsg = ipvs_get_group_by_name(vs->vsgname, vs_group);
+	virtual_server_group_entry *vsg_entry;
+	struct sockaddr_storage *addr;
+	list l;
+	element e;
+
+	if (!vs->vsgname || !vs->vip_bind_dev || !vsg)
+		return;
+
+	memset(&req, 0, sizeof (req));
+
+	req.n.nlmsg_flags = NLM_F_REQUEST;
+	req.n.nlmsg_type = RTM_NEWADDR;
+
+	ifa_idx = if_nametoindex(vs->vip_bind_dev);
+
+	if (!ifa_idx) {
+		log_message(LOG_INFO, "interface %s does not exist",
+							vs->vip_bind_dev);
+		return;
+	}
+
+	req.ifa.ifa_index = ifa_idx;
+
+	/* visit addr_ip list */
+	l = vsg->addr_ip;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+
+		if (ISALIVE(vsg_entry))
+			continue;
+
+		addr = &vsg_entry->addr;
+		req.n.nlmsg_len = NLMSG_LENGTH(sizeof (struct ifaddrmsg));
+		req.ifa.ifa_family = addr->ss_family;
+		if(req.ifa.ifa_family == AF_INET6) {
+			req.ifa.ifa_prefixlen = 128;
+			addattr_l(&req.n, sizeof(req), IFA_LOCAL,
+				&((struct sockaddr_in6 *)addr)->sin6_addr,
+						sizeof(struct in6_addr));
+		} else {
+			req.ifa.ifa_prefixlen = 32;
+			addattr_l(&req.n, sizeof(req), IFA_LOCAL,
+				&((struct sockaddr_in *)addr)->sin_addr,
+						sizeof(struct in_addr));
+		}
+
+		log_message(LOG_INFO, "ADD VIP %s", inet_sockaddrtos(addr));
+		if (netlink_cmd(&nl_cmd, &req.n) < 0)
+			log_message(LOG_INFO, "ADD VIP = %s failed", inet_sockaddrtos(addr));
+	}
+
+	/* visit range list */
+	l = vsg->range;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+
+		if (ISALIVE(vsg_entry))
+			continue;
+
+		netlink_range_cmd(UP, vsg_entry);
 	}
 }
 
@@ -395,6 +547,38 @@ clear_services(void)
 	return 1;
 }
 
+/* only for alpha & reload mode !!! */
+void inline
+alpha_reload_handle(virtual_server *vs, real_server *rs)
+{
+	if (ISALIVE(rs)) {
+		/*
+		 * In alpha mode, rs has been set failed_checkers
+		 * we must do a clean in reload to make alive rs
+		 * in consistent state
+		 */
+		list l = rs->failed_checkers;
+		element next, tmp;
+
+		for (tmp = LIST_HEAD(l); tmp; tmp = next) {
+			next = tmp->next;
+			free_list_element(l, tmp);
+		}
+		l->head = NULL;
+		l->tail = NULL;
+
+		/*
+		 * vsgroup may has new entry after reload
+		 * so add the alive rs to the new one
+		 */
+		if (vs->vsgname) {
+			UNSET_ALIVE(rs);
+			ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs);
+			SET_ALIVE(rs);
+		}
+	}
+}
+
 /* Set a realserver IPVS rules */
 static int
 init_service_rs(virtual_server * vs)
@@ -409,7 +593,10 @@ init_service_rs(virtual_server * vs)
 		 * later upon healthchecks recovery (if ever).
 		 */
 		if (vs->alpha) {
-			UNSET_ALIVE(rs);
+			if (!reload)
+				UNSET_ALIVE(rs);
+			else
+				alpha_reload_handle(vs, rs);
 			continue;
 		}
 		if (!ISALIVE(rs)) {
@@ -428,32 +615,64 @@ init_service_rs(virtual_server * vs)
 	return 1;
 }
 
+static int
+init_service_laddr(virtual_server * vs)
+{
+	/*Set local ip address in "FNAT" mode of IPVS */
+	if ((vs->loadbalancing_kind == IP_VS_CONN_F_FULLNAT) && vs->local_addr_gname) {
+		if (!ipvs_cmd(LVS_CMD_ADD_LADDR, check_data->vs_group, vs, NULL))
+			return 0;
+	}
+
+	return 1;
+}
+
+static void
+add_new_laddr(virtual_server *vs)
+{
+	local_addr_group *laddr_group;
+
+	laddr_group = ipvs_get_laddr_group_by_name(vs->local_addr_gname,
+						check_data->laddr_group);
+	if (laddr_group)
+		ipvs_new_laddr_add(vs, laddr_group);
+}
+
 /* Set a virtualserver IPVS rules */
 static int
 init_service_vs(virtual_server * vs)
 {
+	/*
+	 * In reloading, bind the new vip(vsge) to make a consistent state.
+	 * It's meaningful to virtual_server_group.
+	 */
+
+	if (reload && vs->alpha && (vs->quorum_state == UP) && vs->vsgname)
+		add_new_vsge_vip(check_data->vs_group, vs);
+
+	if (reload && vs->local_addr_gname)
+		add_new_laddr(vs);
+
 	/* Init the VS root */
 	if (!ISALIVE(vs) || vs->vsgname) {
-		if (!ipvs_cmd(LVS_CMD_ADD, check_data->vs_group, vs, NULL))
+		if (!ipvs_cmd(LVS_CMD_ADD, check_data->vs_group, vs, NULL) ||
+					!init_service_laddr(vs))
 			return 0;
 		else
 			SET_ALIVE(vs);
-	}
-
-	/*Set local ip address in "FNAT" mode of IPVS */
-	if ((vs->loadbalancing_kind == IP_VS_CONN_F_FULLNAT) && vs->local_addr_gname) { 
-		if (!ipvs_cmd(LVS_CMD_ADD_LADDR, check_data->vs_group, vs, NULL))
-			return 0; 
 	}
 
 	/* Processing real server queue */
 	if (!LIST_ISEMPTY(vs->rs)) {
 		if (!init_service_rs(vs))
 			return 0;
-		if (vs->alpha)
-			vs->quorum_state = DOWN;
-		else
+
+		if (!vs->alpha)
 			netlink_vipaddress(check_data->vs_group, vs, UP);
+
+		/* In fact vs quorum_state has been DOWN with conf reading */
+		if (vs->alpha && !reload)
+			vs->quorum_state = DOWN;
 	}
 	return 1;
 }
@@ -503,17 +722,20 @@ perform_quorum_state(virtual_server *vs, int add)
 void
 update_quorum_state(virtual_server * vs)
 {
+	long unsigned weigh_count;
 	char rsip[INET6_ADDRSTRLEN];
+
+	weigh_count = weigh_live_realservers(vs);
 
 	/* If we have just gained quorum, it's time to consider notify_up. */
 	if (vs->quorum_state == DOWN &&
-	    weigh_live_realservers(vs) >= vs->quorum + vs->hysteresis) {
+			weigh_count >= vs->quorum + vs->hysteresis) {
 		vs->quorum_state = UP;
 		log_message(LOG_INFO, "Gained quorum %lu+%lu=%lu <= %u for VS [%s]:%d"
 				    , vs->quorum
 				    , vs->hysteresis
 				    , vs->quorum + vs->hysteresis
-				    , weigh_live_realservers(vs)
+				    , weigh_count
 				    , (vs->vsgname) ? vs->vsgname : inet_sockaddrtos(&vs->addr)
 				    , ntohs(inet_sockaddrport(&vs->addr)));
 		if (vs->s_svr && ISALIVE(vs->s_svr)) {
@@ -544,13 +766,13 @@ update_quorum_state(virtual_server * vs)
 	 * VS notify_down and sorry_server cases
 	 */
 	if (vs->quorum_state == UP &&
-	    weigh_live_realservers(vs) < vs->quorum - vs->hysteresis) {
+			weigh_count < vs->quorum - vs->hysteresis) {
 		vs->quorum_state = DOWN;
 		log_message(LOG_INFO, "Lost quorum %lu-%lu=%lu > %u for VS [%s]:%d"
 				    , vs->quorum
 				    , vs->hysteresis
 				    , vs->quorum - vs->hysteresis
-				    , weigh_live_realservers(vs)
+				    , weigh_count
 				    , (vs->vsgname) ? vs->vsgname : inet_sockaddrtos(&vs->addr)
 				    , ntohs(inet_sockaddrport(&vs->addr)));
 		netlink_vipaddress(check_data->vs_group, vs, DOWN);
@@ -615,7 +837,8 @@ perform_svr_state(int alive, virtual_server * vs, real_server * rs)
 		}
 
 		/* We may have gained quorum */
-		update_quorum_state(vs);
+		if (vs->quorum_state == DOWN)
+			update_quorum_state(vs);
 	}
 
 	if (ISALIVE(rs) && !alive) {
@@ -644,7 +867,8 @@ perform_svr_state(int alive, virtual_server * vs, real_server * rs)
 		}
 
 		/* We may have lost quorum */
-		update_quorum_state(vs);
+		if (vs->quorum_state == UP)
+			update_quorum_state(vs);
 	}
 }
 
@@ -679,31 +903,11 @@ update_svr_wgt(int weight, virtual_server * vs, real_server * rs)
 
 /* Test if realserver is marked UP for a specific checker */
 int
-svr_checker_up(int alive,  checker_id_t cid, real_server *rs)
+svr_checker_up(checker_id_t cid, real_server *rs)
 {
 	element e;
 	list l = rs->failed_checkers;
 	checker_id_t *id;
-
-	if (rs->reload_alive) {
-		/* first check failed under alpha mode
-		 * and the rs is alive before reload
-		 */
-		if (!alive && !ISALIVE(rs)) {
-			element next;
-
-			for (e = LIST_HEAD(l); e; e = next) {
-				next = e->next;
-				free_list_element(l, e);
-			}
-			l->head = NULL;
-			l->tail = NULL;
-
-			SET_ALIVE(rs);
-		}
-		/* make sure we do not go here next time */
-		rs->reload_alive = 0;
-	}
 
 	/*
 	 * We assume there is not too much checker per
@@ -772,6 +976,7 @@ vsge_exist(virtual_server_group_entry *vsg_entry, list l)
 			 * are changing from alive state.
 			 */
 			SET_ALIVE(vsge);
+			vsge->laddr_set = vsg_entry->laddr_set;
 			return 1;
 		}
 	}
@@ -844,6 +1049,18 @@ vs_exist(virtual_server * old_vs)
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vs = ELEMENT_DATA(e);
 		if (VS_ISEQ(old_vs, vs)) {
+			/* Check if dev change */
+			if (((old_vs->vip_bind_dev && vs->vip_bind_dev &&
+				strcmp(old_vs->vip_bind_dev, vs->vip_bind_dev)) ||
+				(old_vs->vip_bind_dev != NULL && vs->vip_bind_dev == NULL)) &&
+				(old_vs->quorum_state == UP)) {
+				char *tmp = old_vs->vip_bind_dev;
+				netlink_vipaddress(old_check_data->vs_group, old_vs, DOWN);
+				old_vs->vip_bind_dev = vs->vip_bind_dev;
+				netlink_vipaddress(old_check_data->vs_group, old_vs, UP);
+				old_vs->vip_bind_dev = tmp;
+			}
+
 			/* Check if group exist */
 			if (vs->vsgname) {
 				vsg = ipvs_get_group_by_name(old_vs->vsgname,
@@ -859,10 +1076,9 @@ vs_exist(virtual_server * old_vs)
 			 * Exist so set alive.
 			 */
 			SET_ALIVE(vs);
-			if ((old_vs->vip_bind_dev && vs->vip_bind_dev &&
-				strcmp(old_vs->vip_bind_dev, vs->vip_bind_dev)) ||
-				(old_vs->vip_bind_dev != NULL && vs->vip_bind_dev == NULL))
-				netlink_vipaddress(old_check_data->vs_group, old_vs, DOWN);
+			/* save the quorum_state  */
+			if (reload && vs->alpha)
+				vs->quorum_state = old_vs->quorum_state;
 			return 1;
 		}
 	}
@@ -891,11 +1107,6 @@ rs_exist(real_server * old_rs, list l)
 			rs->alive = old_rs->alive;
 			rs->set = old_rs->set;
 			rs->weight = old_rs->weight;
-			/*
-			 * The alpha mode will reset rs to unalive.
-			 * We save the status before reload here
-			 */
-			rs->reload_alive = rs->alive;
 			return 1;
 		}
 	}
@@ -972,8 +1183,10 @@ laddr_entry_exist(local_addr_entry *laddr_entry, list l)
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		entry = ELEMENT_DATA(e);
 		if (sockstorage_equal(&entry->addr, &laddr_entry->addr) && 
-						entry->range == laddr_entry->range)
+					entry->range == laddr_entry->range) {
+			SET_ALIVE(entry);
 			return 1;
+		}
 	}
 
 	return 0;

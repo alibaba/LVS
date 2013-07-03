@@ -39,19 +39,25 @@
 #include <net/net_namespace.h>
 #include <net/ip_vs.h>
 
+
 /*
  *  Connection hash table: for input and output packets lookups of IPVS
  */
-static struct list_head *ip_vs_conn_tab;
+DEFINE_PER_CPU(struct list_head *, ip_vs_conn_tab_percpu);
+DEFINE_PER_CPU(spinlock_t, ip_vs_conn_tab_lock);
+
+/* the limit of conns */
+int sysctl_ip_vs_conn_max_num = 0;
 
 /*  SLAB cache for IPVS connections */
 static struct kmem_cache *ip_vs_conn_cachep __read_mostly;
 
 /*  counter for current IPVS connections */
-static atomic_t ip_vs_conn_count = ATOMIC_INIT(0);
+DEFINE_PER_CPU(int, ip_vs_conn_cnt_per) = {0};
 
 /*  counter for no client port connections */
 static atomic_t ip_vs_conn_no_cport_cnt = ATOMIC_INIT(0);
+//DEFINE_PER_CPU(int, ip_vs_conn_no_cport_cnt_per);
 
 /* random value for IPVS connection hash */
 static unsigned int ip_vs_conn_rnd;
@@ -189,10 +195,12 @@ static inline int __ip_vs_conn_hash(struct ip_vs_conn *cp, unsigned ihash,
 	int ret;
 
 	if (!(cp->flags & IP_VS_CONN_F_HASHED)) {
+		struct list_head *this_cpu_conn_tab =
+				per_cpu(ip_vs_conn_tab_percpu, cp->cpuid);
 		ci_idx = cp->in_idx;
 		co_idx = cp->out_idx;
-		list_add(&ci_idx->c_list, &ip_vs_conn_tab[ihash]);
-		list_add(&co_idx->c_list, &ip_vs_conn_tab[ohash]);
+		list_add(&ci_idx->c_list, &this_cpu_conn_tab[ihash]);
+		list_add(&co_idx->c_list, &this_cpu_conn_tab[ohash]);
 		cp->flags |= IP_VS_CONN_F_HASHED;
 		atomic_inc(&cp->refcnt);
 		ret = 1;
@@ -228,13 +236,13 @@ static inline int ip_vs_conn_hash(struct ip_vs_conn *cp)
 			       cp->lport);
 
 	/* locked */
-	ip_vs_conn_lock2(ihash, ohash);
+	spin_lock(&per_cpu(ip_vs_conn_tab_lock, cp->cpuid));
 
 	/* hashed */
 	ret = __ip_vs_conn_hash(cp, ihash, ohash);
 
 	/* unlocked */
-	ip_vs_conn_unlock2(ihash, ohash);
+	spin_unlock(&per_cpu(ip_vs_conn_tab_lock, cp->cpuid));
 
 	return ret;
 }
@@ -260,7 +268,7 @@ static inline int ip_vs_conn_unhash(struct ip_vs_conn *cp)
 			       cp->lport);
 
 	/* locked */
-	ip_vs_conn_lock2(ihash, ohash);
+	spin_lock(&per_cpu(ip_vs_conn_tab_lock, cp->cpuid));
 
 	/* unhashed */
 	if ((cp->flags & IP_VS_CONN_F_HASHED)
@@ -277,7 +285,7 @@ static inline int ip_vs_conn_unhash(struct ip_vs_conn *cp)
 	}
 
 	/* unlocked */
-	ip_vs_conn_unlock2(ihash, ohash);
+	spin_unlock(&per_cpu(ip_vs_conn_tab_lock, cp->cpuid));
 
 	return ret;
 }
@@ -294,12 +302,14 @@ static inline struct ip_vs_conn *__ip_vs_conn_get
 	unsigned hash;
 	struct ip_vs_conn *cp;
 	struct ip_vs_conn_idx *cidx;
+	struct list_head *this_cpu_conn_tab;
 
 	hash = ip_vs_conn_hashkey(af, s_addr, s_port, d_addr, d_port);
+	this_cpu_conn_tab = __get_cpu_var(ip_vs_conn_tab_percpu);
 
-	ct_read_lock(hash);
+	spin_lock(&__get_cpu_var(ip_vs_conn_tab_lock));
 
-	list_for_each_entry(cidx, &ip_vs_conn_tab[hash], c_list) {
+	list_for_each_entry(cidx, &this_cpu_conn_tab[hash], c_list) {
 		cp = cidx->cp;
 		if (cidx->af == af &&
 		    ip_vs_addr_equal(af, s_addr, &cidx->s_addr) &&
@@ -310,12 +320,12 @@ static inline struct ip_vs_conn *__ip_vs_conn_get
 			/* HIT */
 			atomic_inc(&cp->refcnt);
 			*res_dir = cidx->flags & IP_VS_CIDX_F_DIR_MASK;
-			ct_read_unlock(hash);
+			spin_unlock(&__get_cpu_var(ip_vs_conn_tab_lock));
 			return cp;
 		}
 	}
 
-	ct_read_unlock(hash);
+	spin_unlock(&__get_cpu_var(ip_vs_conn_tab_lock));
 
 	return NULL;
 }
@@ -347,12 +357,14 @@ struct ip_vs_conn *ip_vs_ct_in_get
 	unsigned hash;
 	struct ip_vs_conn_idx *cidx;
 	struct ip_vs_conn *cp;
+	struct list_head *this_cpu_conn_tab;
 
 	hash = ip_vs_conn_hashkey(af, s_addr, s_port, d_addr, d_port);
+	this_cpu_conn_tab = __get_cpu_var(ip_vs_conn_tab_percpu);
 
-	ct_read_lock(hash);
+	spin_lock(&__get_cpu_var(ip_vs_conn_tab_lock));
 
-	list_for_each_entry(cidx, &ip_vs_conn_tab[hash], c_list) {
+	list_for_each_entry(cidx, &this_cpu_conn_tab[hash], c_list) {
 		cp = cidx->cp;
 		if (cidx->af == af &&
 		    ip_vs_addr_equal(af, s_addr, &cidx->s_addr) &&
@@ -371,7 +383,7 @@ struct ip_vs_conn *ip_vs_ct_in_get
 	cp = NULL;
 
       out:
-	ct_read_unlock(hash);
+	spin_unlock(&__get_cpu_var(ip_vs_conn_tab_lock));
 
 	IP_VS_DBG_BUF(9, "template lookup %s %s:%d->%s:%d %s\n",
 		      ip_vs_proto_name(protocol),
@@ -697,6 +709,8 @@ static inline int ip_vs_hbind_laddr(struct ip_vs_conn *cp)
 	/* choose a local address by round-robin */
 	local = ip_vs_get_laddr(svc);
 	if (local != NULL) {
+		int cpu = cp->cpuid;
+
 		/*OUTside2INside: hashed by client address and port, virtual address and port */
 		ihash =
 		    ip_vs_conn_hashkey(cp->af, &cp->caddr, cp->cport,
@@ -721,13 +735,14 @@ static inline int ip_vs_hbind_laddr(struct ip_vs_conn *cp)
 			ohash =
 			    ip_vs_conn_hashkey(cp->af, &cp->daddr, cp->dport,
 					       &cp->laddr, cp->lport);
-			/* lock the conntab bucket */
-			ip_vs_conn_lock2(ihash, ohash);
+			/* lock the conntab of the current cpu */
+			spin_lock(&per_cpu(ip_vs_conn_tab_lock, cpu));
+
 			/*
 			 * check local address and port is valid by lookup connection table
 			 */
-			list_for_each_entry(cidx, &ip_vs_conn_tab[ohash],
-					    c_list) {
+			list_for_each_entry(cidx, &per_cpu(ip_vs_conn_tab_percpu
+						,cpu)[ohash], c_list) {
 				if (cidx->af == cp->af
 				    && ip_vs_addr_equal(cp->af, &cp->daddr,
 							&cidx->s_addr)
@@ -746,12 +761,12 @@ static inline int ip_vs_hbind_laddr(struct ip_vs_conn *cp)
 				cp->local = local;
 				/* hashed */
 				__ip_vs_conn_hash(cp, ihash, ohash);
-				ip_vs_conn_unlock2(ihash, ohash);
+				spin_unlock(&per_cpu(ip_vs_conn_tab_lock, cpu));
 				atomic_inc(&local->conn_counts);
 				ret = 1;
 				goto out;
 			}
-			ip_vs_conn_unlock2(ihash, ohash);
+			spin_unlock(&per_cpu(ip_vs_conn_tab_lock, cpu));
 		}
 		if (ret == 0) {
 			ip_vs_laddr_put(local);
@@ -867,7 +882,8 @@ static void ip_vs_conn_del(struct ip_vs_conn *cp)
 	ip_vs_unbind_laddr(cp);
 	if (cp->flags & IP_VS_CONN_F_NO_CPORT)
 		atomic_dec(&ip_vs_conn_no_cport_cnt);
-	atomic_dec(&ip_vs_conn_count);
+	/* __get_cpu_var(ip_vs_conn_cnt_per)-- */
+	per_cpu(ip_vs_conn_cnt_per, cp->cpuid)--;
 
 	kmem_cache_free(ip_vs_conn_cachep, cp);
 	cp = NULL;
@@ -875,6 +891,7 @@ static void ip_vs_conn_del(struct ip_vs_conn *cp)
 
 static void ip_vs_conn_expire(unsigned long data)
 {
+	int cpu;
 	struct ip_vs_conn *cp = (struct ip_vs_conn *)data;
 	struct sk_buff *tmp_skb = NULL;
 	struct ip_vs_protocol *pp = ip_vs_proto_get(cp->protocol);
@@ -892,6 +909,11 @@ static void ip_vs_conn_expire(unsigned long data)
 	 *      hey, I'm using it
 	 */
 	atomic_inc(&cp->refcnt);
+	cpu = cp->cpuid;
+	if(unlikely(cpu != smp_processor_id())) {
+		IP_VS_ERR_RL("timer is migrates form cpu%d to cpu%d\n",
+				cpu, smp_processor_id());
+	}
 
 	/*
 	 * Retransmit syn packet to rs.
@@ -945,7 +967,7 @@ static void ip_vs_conn_expire(unsigned long data)
 		ip_vs_unbind_laddr(cp);
 		if (cp->flags & IP_VS_CONN_F_NO_CPORT)
 			atomic_dec(&ip_vs_conn_no_cport_cnt);
-		atomic_dec(&ip_vs_conn_count);
+		per_cpu(ip_vs_conn_cnt_per, cpu)--;
 
 		/* free stored ack packet */
 		while ((tmp_skb = skb_dequeue(&cp->ack_skb)) != NULL) {
@@ -961,6 +983,9 @@ static void ip_vs_conn_expire(unsigned long data)
 
 		if (cp->indev != NULL)
 			dev_put(cp->indev);
+
+		if (cp->dev_inside != NULL)
+			dev_put(cp->dev_inside);
 
 		kmem_cache_free(ip_vs_conn_cachep, cp);
 		return;
@@ -996,6 +1021,13 @@ struct ip_vs_conn *ip_vs_conn_new(int af, int proto,
 	struct ip_vs_protocol *pp = ip_vs_proto_get(proto);
 	struct ip_vs_conn_idx *ci_idx, *co_idx;
 	struct tcphdr _tcph, *th;
+
+	if ( (sysctl_ip_vs_conn_max_num != 0) && ((num_online_cpus() *
+				__get_cpu_var(ip_vs_conn_cnt_per)) >=
+				sysctl_ip_vs_conn_max_num) ) {
+		IP_VS_INC_ESTATS(ip_vs_esmib, CONN_EXCEEDED);
+		return NULL;
+	}
 
 	cp = kmem_cache_zalloc(ip_vs_conn_cachep, GFP_ATOMIC);
 	if (cp == NULL) {
@@ -1058,7 +1090,7 @@ struct ip_vs_conn *ip_vs_conn_new(int af, int proto,
 	atomic_set(&cp->n_control, 0);
 	atomic_set(&cp->in_pkts, 0);
 
-	atomic_inc(&ip_vs_conn_count);
+	__get_cpu_var(ip_vs_conn_cnt_per)++;
 	if (flags & IP_VS_CONN_F_NO_CPORT)
 		atomic_inc(&ip_vs_conn_no_cport_cnt);
 
@@ -1068,6 +1100,9 @@ struct ip_vs_conn *ip_vs_conn_new(int af, int proto,
 	/* Set its state and timeout */
 	cp->state = 0;
 	cp->timeout = 3 * HZ;
+
+	/* Save the current CPU ID */
+	cp->cpuid = smp_processor_id();
 
 	/* Bind its packet transmitter */
 #ifdef CONFIG_IP_VS_IPV6
@@ -1134,8 +1169,9 @@ struct ip_vs_conn *ip_vs_conn_new(int af, int proto,
 
 /*
  *	/proc/net/ip_vs_conn entries
+ *  be dropped at v3 for performance
  */
-#ifdef CONFIG_PROC_FS
+#ifdef CONFIG_PROC_FS_NO_EXIST
 
 static void *ip_vs_conn_array(struct seq_file *seq, loff_t pos)
 {
@@ -1332,148 +1368,106 @@ static const struct file_operations ip_vs_conn_sync_fops = {
 #endif
 
 /*
- *      Randomly drop connection entries before running out of memory
- */
-static inline int todrop_entry(struct ip_vs_conn *cp)
-{
-	/*
-	 * The drop rate array needs tuning for real environments.
-	 * Called from timer bh only => no locking
-	 */
-	static const char todrop_rate[9] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
-	static char todrop_counter[9] = { 0 };
-	int i;
-
-	/* if the conn entry hasn't lasted for 60 seconds, don't drop it.
-	   This will leave enough time for normal connection to get
-	   through. */
-	if (time_before(cp->timeout + jiffies, cp->timer.expires + 60 * HZ))
-		return 0;
-
-	/* Don't drop the entry if its number of incoming packets is not
-	   located in [0, 8] */
-	i = atomic_read(&cp->in_pkts);
-	if (i > 8 || i < 0)
-		return 0;
-
-	if (!todrop_rate[i])
-		return 0;
-	if (--todrop_counter[i] > 0)
-		return 0;
-
-	todrop_counter[i] = todrop_rate[i];
-	return 1;
-}
-
-/* Called from keventd and must protect itself from softirqs */
-void ip_vs_random_dropentry(void)
-{
-	int idx;
-	struct ip_vs_conn *cp;
-	struct ip_vs_conn_idx *cidx;
-
-	/*
-	 * Randomly scan 1/32 of the whole table every second
-	 */
-	for (idx = 0; idx < (IP_VS_CONN_TAB_SIZE >> 5); idx++) {
-		unsigned hash = net_random() & IP_VS_CONN_TAB_MASK;
-
-		/*
-		 *  Lock is actually needed in this loop.
-		 */
-		ct_write_lock_bh(hash);
-
-		list_for_each_entry(cidx, &ip_vs_conn_tab[hash], c_list) {
-			cp = cidx->cp;
-			if (cp->flags & IP_VS_CONN_F_TEMPLATE)
-				/* connection template */
-				continue;
-
-			if (cp->protocol == IPPROTO_TCP) {
-				switch (cp->state) {
-				case IP_VS_TCP_S_SYN_RECV:
-				case IP_VS_TCP_S_SYNACK:
-					break;
-
-				case IP_VS_TCP_S_ESTABLISHED:
-					if (todrop_entry(cp))
-						break;
-					continue;
-
-				default:
-					continue;
-				}
-			} else {
-				if (!todrop_entry(cp))
-					continue;
-			}
-
-			IP_VS_DBG(4, "del connection\n");
-			ip_vs_conn_expire_now(cp);
-			if (cp->control) {
-				IP_VS_DBG(4, "del conn template\n");
-				ip_vs_conn_expire_now(cp->control);
-			}
-		}
-		ct_write_unlock_bh(hash);
-	}
-}
-
-/*
  *      Flush all the connection entries in the ip_vs_conn_tab
  */
 static void ip_vs_conn_flush(void)
 {
 	int idx;
+	int cpu;
 	struct ip_vs_conn *cp;
 	struct ip_vs_conn_idx *cidx;
+	struct list_head *ip_vs_conn_tab_per;
 
-      flush_again:
-	for (idx = 0; idx < IP_VS_CONN_TAB_SIZE; idx++) {
-		/*
-		 *  Lock is actually needed in this loop.
-		 */
-		ct_write_lock_bh(idx);
+	for_each_possible_cpu(cpu) {
+		ip_vs_conn_tab_per = per_cpu(ip_vs_conn_tab_percpu, cpu);
+	flush_again:
+		for (idx = 0; idx < IP_VS_CONN_TAB_SIZE; idx++) {
+			/*
+			 *  Lock is actually needed in this loop.
+			 */
+			spin_lock_bh(&per_cpu(ip_vs_conn_tab_lock, cpu));
 
-		list_for_each_entry(cidx, &ip_vs_conn_tab[idx], c_list) {
-			IP_VS_DBG(4, "del connection\n");
-			cp = cidx->cp;
-			ip_vs_conn_expire_now(cp);
-			if (cp->control) {
-				IP_VS_DBG(4, "del conn template\n");
-				ip_vs_conn_expire_now(cp->control);
+			list_for_each_entry(cidx, &ip_vs_conn_tab_per[idx],
+								c_list) {
+				IP_VS_DBG(4, "del connection\n");
+				cp = cidx->cp;
+				ip_vs_conn_expire_now(cp);
+				if (cp->control) {
+					IP_VS_DBG(4, "del conn template\n");
+					ip_vs_conn_expire_now(cp->control);
+				}
 			}
+			spin_unlock_bh(&per_cpu(ip_vs_conn_tab_lock, cpu));
 		}
-		ct_write_unlock_bh(idx);
+		/* the counter may be not 0, because maybe some conn entries
+		 *  are run by slow timer handler
+		 * or unhashed but still referred */
+		if (per_cpu(ip_vs_conn_cnt_per, cpu) != 0) {
+			schedule();
+			goto flush_again;
+		}
 	}
+}
 
-	/* the counter may be not NULL, because maybe some conn entries
-	   are run by slow timer handler or unhashed but still referred */
-	if (atomic_read(&ip_vs_conn_count) != 0) {
-		schedule();
-		goto flush_again;
-	}
+static void ip_vs_conn_max_init(void)
+{
+	int conn_size;
+	int conns_perpage;
+	int conn_tab_limit;
+
+	conn_size = sizeof(struct ip_vs_conn) +
+			2 * sizeof(struct ip_vs_conn_idx);
+	conns_perpage = PAGE_SIZE / ALIGN(conn_size, cache_line_size());
+
+	pr_info("conn size:%d, conns per page:%d, num_physpages: %lu\n",
+			conn_size, conns_perpage, num_physpages);
+
+	/* half of memory for ip_vs_conn */
+	sysctl_ip_vs_conn_max_num = (num_physpages / 2) * conns_perpage;
+
+	/* the average length of hash chain must be less than 4 */
+	conn_tab_limit = (IP_VS_CONN_TAB_SIZE << 2) * num_online_cpus();
+
+	if ( sysctl_ip_vs_conn_max_num > conn_tab_limit )
+		sysctl_ip_vs_conn_max_num = conn_tab_limit;
+
+	pr_info("maximum number of ip_vs_conn: %d\n",
+				sysctl_ip_vs_conn_max_num);
 }
 
 int __init ip_vs_conn_init(void)
 {
 	int idx;
+	int cpu;
 
-	/*
-	 * Allocate the connection hash table and initialize its list heads
-	 */
-	ip_vs_conn_tab =
-	    vmalloc(IP_VS_CONN_TAB_SIZE * (sizeof(struct list_head)));
-	if (!ip_vs_conn_tab)
-		return -ENOMEM;
 
+	for_each_possible_cpu(cpu) {
+		void *tmp;
+		/*
+		 * Allocate the connection hash table and
+		 * initialize its list heads
+		 */
+		tmp = vmalloc(IP_VS_CONN_TAB_SIZE * sizeof(struct list_head));
+		if (!tmp) {
+			int i;
+			for(i=0; i < cpu; i++)
+				vfree(per_cpu(ip_vs_conn_tab_percpu, i));
+			return -ENOMEM;
+		}
+
+		per_cpu(ip_vs_conn_tab_percpu, cpu) = tmp;
+
+		spin_lock_init(&per_cpu(ip_vs_conn_tab_lock, cpu));
+	}
 	/* Allocate ip_vs_conn slab cache */
 	ip_vs_conn_cachep = kmem_cache_create("ip_vs_conn",
 					      sizeof(struct ip_vs_conn) +
 					      2 * sizeof(struct ip_vs_conn_idx),
 					      0, SLAB_HWCACHE_ALIGN, NULL);
 	if (!ip_vs_conn_cachep) {
-		vfree(ip_vs_conn_tab);
+		for_each_possible_cpu(cpu) {
+			vfree(per_cpu(ip_vs_conn_tab_percpu, cpu));
+		}
 		return -ENOMEM;
 	}
 
@@ -1485,32 +1479,46 @@ int __init ip_vs_conn_init(void)
 		  sizeof(struct ip_vs_conn) +
 		  2 * sizeof(struct ip_vs_conn_idx));
 
-	for (idx = 0; idx < IP_VS_CONN_TAB_SIZE; idx++) {
-		INIT_LIST_HEAD(&ip_vs_conn_tab[idx]);
+	for_each_possible_cpu(cpu) {
+		struct list_head *this_cpu_conn_tab;
+
+		this_cpu_conn_tab = per_cpu(ip_vs_conn_tab_percpu, cpu);
+		for (idx = 0; idx < IP_VS_CONN_TAB_SIZE; idx++) {
+			INIT_LIST_HEAD(&this_cpu_conn_tab[idx]);
+		}
 	}
 
 	for (idx = 0; idx < CT_LOCKARRAY_SIZE; idx++) {
 		rwlock_init(&__ip_vs_conntbl_lock_array[idx].l);
 	}
 
-	proc_net_fops_create(&init_net, "ip_vs_conn", 0, &ip_vs_conn_fops);
+	/* disable in v3 */
+	/*proc_net_fops_create(&init_net, "ip_vs_conn", 0, &ip_vs_conn_fops);
 	proc_net_fops_create(&init_net, "ip_vs_conn_sync", 0,
-			     &ip_vs_conn_sync_fops);
+			     &ip_vs_conn_sync_fops);*/
 
 	/* calculate the random value for connection hash */
 	get_random_bytes(&ip_vs_conn_rnd, sizeof(ip_vs_conn_rnd));
+
+	ip_vs_conn_max_init();
 
 	return 0;
 }
 
 void ip_vs_conn_cleanup(void)
 {
+	int cpu;
+
 	/* flush all the connection entries first */
 	ip_vs_conn_flush();
 
 	/* Release the empty cache */
 	kmem_cache_destroy(ip_vs_conn_cachep);
-	proc_net_remove(&init_net, "ip_vs_conn");
-	proc_net_remove(&init_net, "ip_vs_conn_sync");
-	vfree(ip_vs_conn_tab);
+
+	/* disable in v3 */
+	//proc_net_remove(&init_net, "ip_vs_conn");
+	//proc_net_remove(&init_net, "ip_vs_conn_sync");
+	for_each_possible_cpu(cpu) {
+		vfree(per_cpu(ip_vs_conn_tab_percpu, cpu));
+	}
 }

@@ -27,10 +27,12 @@
 #include "memory.h"
 #include "utils.h"
 #include "ipwrapper.h"
+#include "ipvswrapper.h"
 
 /* global vars */
 check_conf_data *check_data = NULL;
 check_conf_data *old_check_data = NULL;
+list vip_queue;
 
 /* SSL facility functions */
 SSL_DATA *
@@ -256,6 +258,11 @@ dump_vs(void *data)
 	if (atoi(vs->timeout_persistence) > 0)
 		log_message(LOG_INFO, "   persistence timeout = %s",
 		       vs->timeout_persistence);
+	if (!atoi(vs->est_timeout))
+		log_message(LOG_INFO, "   vs privated establish state timeout = Default");
+	else
+		log_message(LOG_INFO, "   vs privated establish state timeout = %s",
+		       vs->est_timeout);
 	if (vs->granularity_persistence)
 		log_message(LOG_INFO, "   persistence granularity = %s",
 		       inet_ntop2(vs->granularity_persistence));
@@ -263,7 +270,7 @@ dump_vs(void *data)
 	       (vs->service_type == IPPROTO_TCP) ? "TCP" : "UDP");
 	log_message(LOG_INFO, "   alpha is %s, omega is %s",
 		    vs->alpha ? "ON" : "OFF", vs->omega ? "ON" : "OFF");
-	log_message(LOG_INFO, "   SYN proxy is %s", 
+	log_message(LOG_INFO, "   SYN proxy is %s",
 		    vs->syn_proxy ? "ON" : "OFF");
 	log_message(LOG_INFO, "   quorum = %lu, hysteresis = %lu", vs->quorum, vs->hysteresis);
 	if (vs->quorum_up)
@@ -324,6 +331,7 @@ alloc_vs(char *ip, char *port)
 
 	new->delay_loop = KEEPALIVED_DEFAULT_DELAY;
 	strncpy(new->timeout_persistence, "0", 1);
+	strncpy(new->est_timeout, "0", 1);
 	new->virtualhost = NULL;
 	new->alpha = 0;
 	new->omega = 0;
@@ -445,4 +453,154 @@ dump_check_data(check_conf_data *check_data)
 		dump_list(check_data->vs);
 	}
 	dump_checkers_queue();
+}
+
+static void
+free_vip_data(void *data)
+{
+	FREE(data);
+}
+
+void
+free_vip_queue(void)
+{
+	free_list(vip_queue);
+	vip_queue = NULL;
+}
+
+inline void
+clear_port(struct sockaddr_storage *addr)
+{
+	if(addr->ss_family == AF_INET) {
+		struct sockaddr_in *addr_v4 = (struct sockaddr_in *)addr;
+		addr_v4->sin_port = 0;
+	} else {
+		struct sockaddr_in6 *addr_v6 = (struct sockaddr_in6 *)addr;
+		addr_v6->sin6_port = 0;
+	}
+}
+
+void
+queue_vip(struct sockaddr_storage *addr, int state)
+{
+	element e;
+	vip_data *ip_entry;
+	vip_data *new;
+
+	for (e = LIST_HEAD(vip_queue); e; ELEMENT_NEXT(e)) {
+		ip_entry = ELEMENT_DATA(e);
+		if (sockstorage_equal(&ip_entry->addr, addr)) {
+			ip_entry->entry_cnt++;
+			if (state == UP)
+				ip_entry->set_cnt++;
+
+			return;
+		}
+	}
+
+	new = (vip_data *) MALLOC(sizeof(vip_data));
+	new->addr = *addr;
+	new->entry_cnt = 1;
+	if (state == UP)
+		new->set_cnt = 1;
+
+	log_message(LOG_INFO, "enqueue VIP = %s, VPORT = %d"
+				, inet_sockaddrtos(&new->addr)
+				, ntohs(inet_sockaddrport(&new->addr)));
+	list_add(vip_queue, new);
+}
+
+void
+count_vip_group_range(virtual_server_group_entry *vsg_entry, virtual_server *vs)
+{
+	uint32_t addr_ip, ip;
+	struct in6_addr *addr_v6;
+	struct in_addr *addr_v4;
+	struct sockaddr_storage addr;
+
+	addr = vsg_entry->addr;
+	/* record ip, ignore port */
+	clear_port(&addr);
+
+	if (vsg_entry->addr.ss_family == AF_INET) {
+		addr_v4 = &(((struct sockaddr_in *) &addr)->sin_addr);
+		ip = addr_v4->s_addr;
+		for (addr_ip = ip;
+				((addr_ip >> 24) & 0xFF) <= vsg_entry->range;
+				addr_ip += 0x01000000) {
+			addr_v4->s_addr = addr_ip;
+			queue_vip(&addr, vs->quorum_state);
+		}
+	} else {
+		addr_v6 = &(((struct sockaddr_in6 *) &addr)->sin6_addr);
+		ip = addr_v6->s6_addr32[3];
+		for (addr_ip = ip;
+				((addr_ip >> 24) & 0xFF) <= vsg_entry->range;
+				addr_ip += 0x01000000) {
+			addr_v6->s6_addr32[3] = addr_ip;
+			queue_vip(&addr, vs->quorum_state);
+		}
+	}
+}
+
+void
+count_vip_group(virtual_server_group *vsg, virtual_server *vs)
+{
+	virtual_server_group_entry *vsg_entry;
+	list l;
+	element e;
+	struct sockaddr_storage addr;
+
+	if (!vsg) return;
+
+	/* visit addr_ip list */
+	l = vsg->addr_ip;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+		addr = vsg_entry->addr;
+		/* record ip, ignore port */
+		clear_port(&addr);
+		queue_vip(&addr, vs->quorum_state);
+	}
+
+	/* visit range list */
+	l = vsg->range;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+		count_vip_group_range(vsg_entry, vs);
+	}
+}
+
+/* scan all vs in conf, count the vips */
+void
+count_vip(void)
+{
+	element e;
+	list l = check_data->vs;
+	virtual_server *vs;
+	virtual_server_group *vsg;
+	struct sockaddr_storage addr;
+
+	if (LIST_ISEMPTY(l))
+		return;
+
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vs = ELEMENT_DATA(e);
+
+		if (vs->vsgname) {
+			vsg = ipvs_get_group_by_name(vs->vsgname, check_data->vs_group);
+			count_vip_group(vsg, vs);
+		} else if (!vs->vfwmark) {
+			addr = vs->addr;
+			clear_port(&addr);
+			queue_vip(&addr, vs->quorum_state);
+		}
+	}
+}
+
+void
+init_vip_queue(void)
+{
+	vip_queue = alloc_list(free_vip_data, NULL);
+	count_vip();
 }

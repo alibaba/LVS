@@ -282,7 +282,7 @@ epilog(thread_t * thread, int method, int t, int c)
 	 * servers.
 	 */
 	if (http_arg->retry_it > http_get_check->nb_get_retry-1) {
-		if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+		if (svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "Check on service [%s]:%d failed after %d retry."
 			       , inet_sockaddrtos(&http_get_check->dst)
 			       , ntohs(inet_sockaddrport(&http_get_check->dst)), http_arg->retry_it);
@@ -345,7 +345,7 @@ timeout_epilog(thread_t * thread, char *smtp_msg, char *debug_msg)
 			    , ntohs(inet_sockaddrport(&http_get_check->dst)));
 
 	/* check if server is currently alive */
-	if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+	if (svr_checker_up(checker->id, checker->rs)) {
 		smtp_alert(checker->rs, NULL, NULL,
 			   "DOWN", smtp_msg);
 		update_svr_checker_state(DOWN, checker->id
@@ -388,7 +388,7 @@ http_handle_response(thread_t * thread, unsigned char digest[16]
 	if (fetched_url->status_code) {
 		if (req->status_code != fetched_url->status_code) {
 			/* check if server is currently alive */
-			if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+			if (svr_checker_up(checker->id, checker->rs)) {
 				log_message(LOG_INFO,
 				       "HTTP status code error to [%s]:%d url(%s)"
 				       ", status_code [%d].",
@@ -417,7 +417,7 @@ http_handle_response(thread_t * thread, unsigned char digest[16]
 			}
 			return epilog(thread, 2, 0, 1);
 		} else {
-			if (!svr_checker_up(UP, checker->id, checker->rs))
+			if (!svr_checker_up(checker->id, checker->rs))
 				log_message(LOG_INFO,
 				       "HTTP status code success to [%s]:%d url(%d)."
 				       , inet_sockaddrtos(&http_get_check->dst)
@@ -438,7 +438,7 @@ http_handle_response(thread_t * thread, unsigned char digest[16]
 
 		if (r) {
 			/* check if server is currently alive */
-			if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+			if (svr_checker_up(checker->id, checker->rs)) {
 				log_message(LOG_INFO,
 				       "MD5 digest error to [%s]:%d url[%s]"
 				       ", MD5SUM [%s].",
@@ -468,7 +468,7 @@ http_handle_response(thread_t * thread, unsigned char digest[16]
 			FREE(digest_tmp);
 			return epilog(thread, 2, 0, 1);
 		} else {
-			if (!svr_checker_up(UP, checker->id, checker->rs))
+			if (!svr_checker_up(checker->id, checker->rs))
 				log_message(LOG_INFO, "MD5 digest success to [%s]:%d url(%d)."
 				       , inet_sockaddrtos(&http_get_check->dst)
 				       , ntohs(inet_sockaddrport(&http_get_check->dst))
@@ -553,7 +553,7 @@ http_read_thread(thread_t * thread)
 
 		if (r == -1) {
 			/* We have encourred a real read error */
-			if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+			if (svr_checker_up(checker->id, checker->rs)) {
 				log_message(LOG_INFO, "Read error with server [%s]:%d: %s"
 				       , inet_sockaddrtos(&http_get_check->dst)
 				       , ntohs(inet_sockaddrport(&http_get_check->dst))
@@ -679,7 +679,7 @@ http_request_thread(thread_t * thread)
 				    , ntohs(inet_sockaddrport(&http_get_check->dst)));
 
 		/* check if server is currently alive */
-		if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+		if (svr_checker_up(checker->id, checker->rs)) {
 			smtp_alert(checker->rs, NULL, NULL,
 				   "DOWN",
 				   "=> CHECK failed on service"
@@ -717,7 +717,7 @@ http_check_thread(thread_t * thread)
 	switch (status) {
 	case connect_error:
 		/* check if server is currently alive */
-		if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+		if (svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "Error connecting server [%s]:%d."
 					    , inet_sockaddrtos(&http_get_check->dst)
 					    , ntohs(inet_sockaddrport(&http_get_check->dst)));
@@ -802,7 +802,7 @@ http_check_thread(thread_t * thread)
 						     (req->ssl, ret));
 #endif
 				if ((http_get_check->proto == PROTO_SSL) &&
-				    (svr_checker_up(DOWN, checker->id, checker->rs))) {
+				    (svr_checker_up(checker->id, checker->rs))) {
 					log_message(LOG_INFO, "SSL handshake/communication error"
 							 " connecting to server"
 							 " (openssl errno: %d) [%s]:%d."
@@ -855,7 +855,7 @@ http_connect_thread(thread_t * thread)
 		 * Check completed.
 		 * check if server is currently alive.
 		 */
-		if (!svr_checker_up(UP, checker->id, checker->rs)) {
+		if (!svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "Remote Web server [%s]:%d succeed on service."
 					    , inet_sockaddrtos(&http_get_check->dst)
 					    , ntohs(inet_sockaddrport(&http_get_check->dst)));

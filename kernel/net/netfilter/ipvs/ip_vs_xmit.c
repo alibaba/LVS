@@ -810,6 +810,40 @@ err:
 }
 #endif
 
+static inline void
+ip_vs_save_xmit_inside_info(struct sk_buff *skb, struct ip_vs_conn *cp)
+{
+	if(!sysctl_ip_vs_fast_xmit_inside)
+		return;
+
+	if(!skb->dev) {
+		IP_VS_DBG_RL("%s(): skb->dev is NULL. \n", __func__);
+		return;
+	}
+	IP_VS_DBG_RL("%s(): netdevice:%s\n", netdev_name(skb->dev), __func__);
+
+	if(likely((skb->dev->type == ARPHRD_ETHER) &&
+					skb_mac_header_was_set(skb))) {
+		struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
+
+		if(unlikely(cp->dev_inside == NULL)) {
+			cp->dev_inside = skb->dev;
+			dev_hold(cp->dev_inside);
+		}
+
+		if (unlikely(cp->dev_inside != skb->dev)) {
+			dev_put(cp->dev_inside);
+			cp->dev_inside = skb->dev;
+			dev_hold(cp->dev_inside);
+		}
+
+		memcpy(cp->src_hwaddr_inside, eth->h_source, ETH_ALEN);
+		memcpy(cp->dst_hwaddr_inside, eth->h_dest, ETH_ALEN);
+	} else {
+		IP_VS_DBG_RL("%s():save dev and mac failed!\n", __func__);
+	}
+}
+
 /* Response transmit to client
  * Used for NAT/Local.
  */
@@ -953,6 +987,8 @@ ip_vs_fnat_response_xmit(struct sk_buff *skb, struct ip_vs_protocol *pp,
 	int mtu;
 	struct iphdr *iph = ip_hdr(skb);
 
+	ip_vs_save_xmit_inside_info(skb, cp);
+
 	if(sysctl_ip_vs_fast_xmit && !ip_vs_fast_response_xmit(skb, pp, cp))
 		return NF_STOLEN;
 
@@ -1016,6 +1052,8 @@ ip_vs_fnat_response_xmit_v6(struct sk_buff *skb, struct ip_vs_protocol *pp,
 {
 	struct rt6_info *rt;	/* Route to the other host */
 	int mtu;
+
+	ip_vs_save_xmit_inside_info(skb, cp);
 
 	if(sysctl_ip_vs_fast_xmit && !ip_vs_fast_response_xmit_v6(skb, pp, cp))
 		return NF_STOLEN;
@@ -1216,6 +1254,180 @@ ip_vs_bypass_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	kfree_skb(skb);
 	LeaveFunction(10);
 	return NF_STOLEN;
+}
+#endif
+
+/* fullnat mode */
+int
+ip_vs_fast_xmit(struct sk_buff *skb, struct ip_vs_protocol *pp,
+						struct ip_vs_conn *cp)
+{
+	struct ethhdr *eth;
+
+	if (!cp->dev_inside)
+		goto err;
+	if (!gso_ok(skb, cp->dev_inside) && (skb->len > cp->dev_inside->mtu))
+		goto err;
+
+	/* Try to reuse skb */
+	if (unlikely(skb_shared(skb) || skb_cloned(skb))) {
+		struct sk_buff *new_skb = skb_copy(skb, GFP_ATOMIC);
+		if(unlikely(new_skb == NULL))
+			goto err;
+
+		/* Drop old skb */
+		kfree_skb(skb);
+		skb = new_skb;
+		IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_SKB_COPY);
+	}
+
+	/* change ip, port. */
+	if ((cp->flags & IP_VS_CONN_F_FWD_MASK) == IP_VS_CONN_F_FULLNAT) {
+		if (pp->fnat_in_handler && !pp->fnat_in_handler(skb, pp, cp))
+			goto err;
+
+		ip_hdr(skb)->saddr = cp->laddr.ip;
+		ip_hdr(skb)->daddr = cp->daddr.ip;
+	} else {
+		IP_VS_ERR_RL("L2 fast xmit support fullnat only!\n");
+		goto err;
+		/*if (pp->dnat_handler && !pp->dnat_handler(skb, pp, cp))
+			goto err;
+
+		ip_hdr(skb)->daddr = cp->daddr.ip;*/
+	}
+
+	ip_send_check(ip_hdr(skb));
+
+	skb->dev = cp->dev_inside;
+
+	if(unlikely(skb_headroom(skb) < LL_RESERVED_SPACE(skb->dev))){
+		struct sk_buff *skb2;
+
+		IP_VS_ERR_RL("need more headroom! realloc skb\n");
+		skb2 = skb_realloc_headroom(skb, LL_RESERVED_SPACE(skb->dev));
+		if (skb2 == NULL)
+			goto err;
+		kfree_skb(skb);
+		skb = skb2;
+	}
+
+	if(likely(skb_mac_header_was_set(skb))) {
+		eth = eth_hdr(skb);
+		memcpy(eth->h_dest, cp->src_hwaddr_inside, ETH_ALEN);
+		memcpy(eth->h_source, cp->dst_hwaddr_inside, ETH_ALEN);
+		skb->data = (unsigned char *)eth_hdr(skb);
+		skb->len += sizeof(struct ethhdr);
+	} else {
+		eth = (struct ethhdr *)skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb);
+		memcpy(eth->h_dest, cp->src_hwaddr_inside, ETH_ALEN);
+		memcpy(eth->h_source, cp->dst_hwaddr_inside, ETH_ALEN);
+	}
+	skb->protocol = eth->h_proto = htons(ETH_P_IP);
+	skb->pkt_type = PACKET_OUTGOING;
+
+	IP_VS_DBG_RL("%s: send skb to RS!\n", __func__);
+
+	/*
+	 *  Send the packet out
+	 *  use do while here, just for local variables/debug/retransimit
+	 */
+	do {
+		int ret = dev_queue_xmit(skb);
+		if (ret != 0)
+			IP_VS_ERR_RL("dev_queue_xmit failed! code:%d\n", ret);
+	}while(0);
+
+	IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_PASS_INSIDE);
+	return 0;
+err:
+	IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_REJECT_INSIDE);
+	return 1;
+}
+
+#ifdef CONFIG_IP_VS_IPV6
+/* just for fullnat mode */
+int
+ip_vs_fast_xmit_v6(struct sk_buff *skb, struct ip_vs_protocol *pp,
+						struct ip_vs_conn *cp)
+{
+	struct ethhdr *eth;
+
+	if (!cp->dev_inside)
+		goto err;
+	if (!gso_ok(skb, cp->dev_inside) && (skb->len > cp->dev_inside->mtu))
+		goto err;
+
+	/* Try to reuse skb if possible */
+	if (unlikely(skb_shared(skb) || skb_cloned(skb))) {
+		struct sk_buff *new_skb = skb_copy(skb, GFP_ATOMIC);
+		if(unlikely(new_skb == NULL))
+			goto err;
+
+		/* Drop old skb */
+		kfree_skb(skb);
+		skb = new_skb;
+		IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_SKB_COPY);
+	}
+
+	/* change ip, port. */
+	if ((cp->flags & IP_VS_CONN_F_FWD_MASK) == IP_VS_CONN_F_FULLNAT) {
+		if (pp->fnat_in_handler && !pp->fnat_in_handler(skb, pp, cp))
+			goto err;
+
+		ipv6_hdr(skb)->saddr = cp->laddr.in6;
+		ipv6_hdr(skb)->daddr = cp->daddr.in6;
+	} else {
+		IP_VS_ERR_RL("L2 fast xmit support fullnat only!\n");
+		goto err;
+		/*if (pp->dnat_handler && !pp->dnat_handler(skb, pp, cp))
+			goto err;
+
+		ipv6_hdr(skb)->daddr = cp->daddr.in6;*/
+	}
+
+	skb->dev = cp->dev_inside;
+
+	if(unlikely(skb_headroom(skb) < LL_RESERVED_SPACE(skb->dev))){
+		struct sk_buff *skb2;
+
+		IP_VS_ERR_RL("need more headroom! realloc skb\n");
+		skb2 = skb_realloc_headroom(skb, LL_RESERVED_SPACE(skb->dev));
+		if (skb2 == NULL)
+			goto err;
+		kfree_skb(skb);
+		skb = skb2;
+	}
+
+	if(likely(skb_mac_header_was_set(skb))) {
+		eth = eth_hdr(skb);
+		memcpy(eth->h_dest, cp->src_hwaddr_inside, ETH_ALEN);
+		memcpy(eth->h_source, cp->dst_hwaddr_inside, ETH_ALEN);
+		skb->data = (unsigned char *)eth_hdr(skb);
+		skb->len += sizeof(struct ethhdr);
+	} else {
+		eth = (struct ethhdr *)skb_push(skb, sizeof(struct ethhdr));
+		skb_reset_mac_header(skb);
+		memcpy(eth->h_dest, cp->src_hwaddr_inside, ETH_ALEN);
+		memcpy(eth->h_source, cp->dst_hwaddr_inside, ETH_ALEN);
+	}
+	skb->protocol = eth->h_proto = htons(ETH_P_IPV6);
+	skb->pkt_type = PACKET_OUTGOING;
+
+	IP_VS_DBG_RL("%s: send skb to RS!\n", __func__);
+	/* Send the packet out */
+	do {
+		int ret = dev_queue_xmit(skb);
+		if (ret != 0)
+			IP_VS_ERR_RL("dev_queue_xmit failed! code:%d\n", ret);
+	}while(0);
+
+	IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_PASS_INSIDE);
+	return 0;
+err:
+	IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_REJECT_INSIDE);
+	return 1;
 }
 #endif
 
@@ -1438,6 +1650,11 @@ ip_vs_fnat_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		IP_VS_DBG(10, "filled cport=%d\n", ntohs(*p));
 	}
 
+	ip_vs_save_xmit_info(skb, pp, cp);
+
+	if(sysctl_ip_vs_fast_xmit_inside && !ip_vs_fast_xmit(skb, pp, cp))
+		return NF_STOLEN;
+
 	if (!(rt = __ip_vs_get_out_rt(cp, RT_TOS(iph->tos))))
 		goto tx_error_icmp;
 
@@ -1453,8 +1670,6 @@ ip_vs_fnat_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 		goto tx_error;
 	}
 
-	ip_vs_save_xmit_info(skb, pp, cp);
-
 	/* copy-on-write the packet before mangling it */
 	if (!skb_make_writable(skb, sizeof(struct iphdr)))
 		goto tx_error_put;
@@ -1467,7 +1682,7 @@ ip_vs_fnat_xmit(struct sk_buff *skb, struct ip_vs_conn *cp,
 	skb_dst_set(skb, &rt->u.dst);
 
 	/* mangle the packet */
-	if (pp->fnat_in_handler && !pp->fnat_in_handler(&skb, pp, cp))
+	if (pp->fnat_in_handler && !pp->fnat_in_handler(skb, pp, cp))
 		goto tx_error;
 	ip_hdr(skb)->saddr = cp->laddr.ip;
 	ip_hdr(skb)->daddr = cp->daddr.ip;
@@ -1519,6 +1734,11 @@ ip_vs_fnat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		IP_VS_DBG(10, "filled cport=%d\n", ntohs(*p));
 	}
 
+	ip_vs_save_xmit_info(skb, pp, cp);
+
+	if(sysctl_ip_vs_fast_xmit_inside && !ip_vs_fast_xmit_v6(skb, pp, cp))
+		return NF_STOLEN;
+
 	rt = __ip_vs_get_out_rt_v6(cp);
 	if (!rt)
 		goto tx_error_icmp;
@@ -1534,8 +1754,6 @@ ip_vs_fnat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 		goto tx_error;
 	}
 
-	ip_vs_save_xmit_info(skb, pp, cp);
-
 	/* copy-on-write the packet before mangling it */
 	if (!skb_make_writable(skb, sizeof(struct ipv6hdr)))
 		goto tx_error_put;
@@ -1548,7 +1766,7 @@ ip_vs_fnat_xmit_v6(struct sk_buff *skb, struct ip_vs_conn *cp,
 	skb_dst_set(skb, &rt->u.dst);
 
 	/* mangle the packet */
-	if (pp->fnat_in_handler && !pp->fnat_in_handler(&skb, pp, cp))
+	if (pp->fnat_in_handler && !pp->fnat_in_handler(skb, pp, cp))
 		goto tx_error;
 	ipv6_hdr(skb)->saddr = cp->laddr.in6;
 	ipv6_hdr(skb)->daddr = cp->daddr.in6;

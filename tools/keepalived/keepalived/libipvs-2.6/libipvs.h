@@ -38,7 +38,8 @@
 #define OPT_PERSISTENCE_ENGINE  0x400000
 #define OPT_LOCAL_ADDRESS	0x800000
 #define OPT_SYNPROXY		0x1000000
-#define NUMBER_OF_OPT		25
+#define OPT_VS_EST_TIMEOUT	0x2000000
+#define NUMBER_OF_OPT		26
 
 #define MINIMUM_IPVS_VERSION_MAJOR      1
 #define MINIMUM_IPVS_VERSION_MINOR      1
@@ -94,9 +95,6 @@ extern int ipvs_update_service(ipvs_service_t *svc);
 
 /* update a virtual service based on option */
 extern int ipvs_update_service_by_options(ipvs_service_t *svc, unsigned int options);
-
-/* config the service's synproxy switch */
-extern int ipvs_update_service_synproxy(ipvs_service_t *svc , int enable);
 
 /* delete a virtual service */
 extern int ipvs_del_service(ipvs_service_t *svc);

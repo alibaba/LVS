@@ -188,9 +188,9 @@ static const char* optnames[] = {
 	"syncid",
 	"exact",
 	"ops",
-	"pe" , 
-	"local-address" , 
-	"synproxy" , 
+	"pe",
+	"local-address",
+	"synproxy",
 };
 
 /*
@@ -203,24 +203,24 @@ static const char* optnames[] = {
  */
 static const char commands_v_options[NUMBER_OF_CMD][NUMBER_OF_OPT] =
 {
-	/*   -n   -c   svc  -s   -p   -M   -r   fwd  -w   -x   -y   -mc  tot  dmn  -st  -rt  thr  -pc  srt  sid  -ex  ops  pe   laddr syn*/
-/*ADD*/     {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' '},
-/*EDIT*/    {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' '},
-/*DEL*/     {'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*FLUSH*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*LIST*/    {' ', '1', '1', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '1', '1', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x'},
-/*ADDSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*DELSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*EDITSRV*/ {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*TIMEOUT*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*STARTD*/  {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x'},
-/*STOPD*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x'},
-/*RESTORE*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*SAVE*/    {' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*ZERO*/    {'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*ADDLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x'},
-/*DELLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x'},
-/*GETLADDR*/{'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+	/*   -n   -c   svc  -s   -p   -M   -r   fwd  -w   -x   -y   -mc  tot  dmn  -st  -rt  thr  -pc  srt  sid  -ex  ops  pe   laddr syn -V*/
+/*ADD*/     {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' ', ' '},
+/*EDIT*/    {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' ', ' '},
+/*DEL*/     {'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*FLUSH*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*LIST*/    {' ', '1', '1', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '1', '1', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x'},
+/*ADDSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*DELSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*EDITSRV*/ {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*TIMEOUT*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*STARTD*/  {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*STOPD*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*RESTORE*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*SAVE*/    {' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*ZERO*/    {'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*ADDLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x', 'x'},
+/*DELLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x', 'x'},
+/*GETLADDR*/{'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
 };
 
 /* printing format flags */
@@ -272,6 +272,7 @@ enum {
 	TAG_SORT,
 	TAG_NO_SORT,
 	TAG_PERSISTENCE_ENGINE,
+	TAG_SET_VS_EST_TIMEOUT,
 };
 
 /* various parsing helpers & parsing functions */
@@ -308,7 +309,7 @@ static void list_all(unsigned int format);
 static void list_timeout(void);
 static void list_daemon(void);
 static int  list_laddrs(ipvs_service_t *svc , int with_title);
-static int list_all_laddrs(void);
+static int  list_all_laddrs(unsigned int format);
 
 static int modprobe_ipvs(void);
 static void check_ipvs_version(void);
@@ -422,6 +423,8 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 		  NULL, NULL },
 		{ "laddr", 'z', POPT_ARG_STRING, &optarg, 'z', NULL, NULL },
 		{ "synproxy", 'j' , POPT_ARG_STRING, &optarg, 'j', NULL, NULL },
+		{ "vsestablish-timeout", 'V', POPT_ARG_STRING|POPT_ARGFLAG_OPTIONAL, &optarg, TAG_SET_VS_EST_TIMEOUT,
+		  NULL, NULL },
 		{ NULL, 0, 0, NULL, 0, NULL, NULL }
 	};
 
@@ -684,12 +687,21 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 			set_option(options, OPT_SYNPROXY);
 
 			if(!memcmp(optarg , "enable" , strlen("enable")))
-				ce->svc.flags = ce->svc.flags | IP_VS_CONN_F_SYNPROXY;
+				ce->svc.flags = ce->svc.flags | IP_VS_SVC_F_SYNPROXY;
 			else if(!memcmp(optarg , "disable" , strlen("disable")))
-				ce->svc.flags = ce->svc.flags & (~IP_VS_CONN_F_SYNPROXY);
+				ce->svc.flags = ce->svc.flags & (~IP_VS_SVC_F_SYNPROXY);
 			else
 				fail(2 , "synproxy switch must be enable or disable\n");
 
+			break;
+			}
+		case TAG_SET_VS_EST_TIMEOUT:
+			{
+			unsigned est_timeout = atoi(optarg);
+			set_option(options, OPT_VS_EST_TIMEOUT);
+			if(!est_timeout)
+				fail(2 , "vsestablish-timeout should not be zero\n");
+			ce->svc.est_timeout = est_timeout;
 			break;
 			}
 		default:
@@ -832,6 +844,7 @@ static int process_options(int argc, char **argv, int reading_stdin)
 	case CMD_SAVE:
 		format |= FMT_RULE;
 		list_all(format);
+		result = list_all_laddrs(format);
 		return 0;
 
 	case CMD_FLUSH:
@@ -890,7 +903,7 @@ static int process_options(int argc, char **argv, int reading_stdin)
 		if(options & OPT_SERVICE)
 			result = list_laddrs(&ce.svc , 1);
 		else
-			result = list_all_laddrs();
+			result = list_all_laddrs(format);
 		break;
 	}
 
@@ -1198,7 +1211,9 @@ static void usage_exit(const char *program, const int exit_status)
 		"  --nosort                            disable sorting output of service/server entries\n"
 		"  --sort                              does nothing, for backwards compatibility\n"
 		"  --ops          -o                   one-packet scheduling\n"
-		"  --numeric      -n                   numeric output of addresses and ports\n",
+		"  --numeric      -n                   numeric output of addresses and ports\n"
+		"  --synproxy     -j [enable/disable]  enable/disable ipvs synproxy to defence tcp flag attack\n"
+		"  --vsestablish-timeout -V [timeout]  set up vs private establish state timeout\n",
 		DEF_SCHED);
 
 	exit(exit_status);
@@ -1425,20 +1440,27 @@ static inline char *fwd_switch(unsigned flags)
 	switch (flags & IP_VS_CONN_F_FWD_MASK) {
 	case IP_VS_CONN_F_MASQ:
 		swt = "-m"; break;
+	case IP_VS_CONN_F_FULLNAT:
+		swt = "-b"; break;
 	case IP_VS_CONN_F_TUNNEL:
 		swt = "-i"; break;
 	case IP_VS_CONN_F_LOCALNODE:
 	case IP_VS_CONN_F_DROUTE:
 		swt = "-g"; break;
 	}
-	return swt;
+
+	if(NULL == swt) {
+		printf("The fwd method is not support in ipvsadm, Plz check the version of ipvsadm or ip_vs kernel\n");
+		exit(1);
+	} else
+		return swt;
 }
 
 
 static void print_largenum(unsigned long long i, unsigned int format)
 {
 	char mytmp[32];
-	size_t len;
+	int len;
 
 	if (format & FMT_EXACT) {
 		len = snprintf(mytmp, 32, "%llu", i);
@@ -1482,7 +1504,7 @@ static void print_title(unsigned int format)
 		       "Prot LocalAddress:Port",
 		       "Weight", "PersistConn", "ActiveConn", "InActConn");
 	else if (!(format & FMT_RULE))
-		printf("Prot LocalAddress:Port Scheduler Flags\n"
+		printf("Prot LocalAddress:Port Scheduler Established(Sec.) Flags\n"
 		       "  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn\n");
 }
 
@@ -1550,6 +1572,12 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 			printf(" pe %s", se->pe_name);
 		if (se->flags & IP_VS_SVC_F_ONEPACKET)
 			printf(" ops");
+		if (se->flags & IP_VS_SVC_F_SYNPROXY)
+			printf(" -j enable");
+		else
+			printf(" -j disable");
+		if(se->est_timeout) /* Kernel version may not be compatible */
+			printf(" -V %u", se->est_timeout);
 	} else if (format & FMT_STATS) {
 		printf("%-33s", svc_name);
 		print_largenum(se->stats.conns, format);
@@ -1565,7 +1593,11 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 		print_largenum(se->stats.inbps, format);
 		print_largenum(se->stats.outbps, format);
 	} else {
-		printf("%s %s", svc_name, se->sched_name);
+		char est_timeout_str[18] = {0}; /* Field wide is 17(char) for est_timeout display */
+		se->est_timeout ?
+			snprintf(est_timeout_str, sizeof(est_timeout_str), "%u", se->est_timeout):
+			snprintf(est_timeout_str, sizeof(est_timeout_str), "UnK. or DFLT. 0"); /* Unknow or Default is 0 */
+		printf("%-22s %-9s %-17s", svc_name, se->sched_name, est_timeout_str);
 		if (se->flags & IP_VS_SVC_F_PERSISTENT) {
 			printf(" persistent %u", se->timeout);
 			if (se->af == AF_INET)
@@ -1582,7 +1614,7 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 			if (se->flags & IP_VS_SVC_F_ONEPACKET)
 				printf(" ops");
 		}
-		if (se->flags & IP_VS_CONN_F_SYNPROXY)
+		if (se->flags & IP_VS_SVC_F_SYNPROXY)
 			printf(" synproxy");
 	}
 	printf("\n");
@@ -1655,7 +1687,7 @@ static void list_laddrs_print_service(struct ip_vs_get_laddrs *d)
 
 	if (!(vname = addrport_to_anyname(d->af, &d->addr, ntohs(d->port),
 		d->protocol, FMT_NUMERIC)))
-		fail(2, "addrport_to_anyname: %s", strerror(errno));	
+		fail(2, "addrport_to_anyname: %s", strerror(errno));
 
 	printf("%-20s %-8u \n" , vname , d->num_laddrs);
 	free(vname);
@@ -1684,16 +1716,40 @@ static void list_laddrs_print_laddr(struct ip_vs_laddr_entry * entry)
 static void print_service_and_laddrs(struct ip_vs_get_laddrs* d, int with_title)
 {
 	int i = 0;
-	
+
 	if(with_title)
 		list_laddrs_print_title();
 
 	list_laddrs_print_service(d);
-	for(i = 0 ; i < d->num_laddrs ; i ++){
-		list_laddrs_print_laddr(d->entrytable + i); 
+	for(i = 0; i < d->num_laddrs; i++){
+		list_laddrs_print_laddr(d->entrytable + i);
 	}
 
 	return;
+}
+
+
+static void print_laddrs_rules(struct ip_vs_get_laddrs *d, unsigned int flag_num)
+{
+	int i = 0;
+	char* vname;
+	char  svc_name[64];
+	char  laddr[32];
+
+	/*To get VIP and VPORT numeric or name resolved*/
+	if (!(vname = addrport_to_anyname(d->af, &d->addr, ntohs(d->port),d->protocol, flag_num)))
+		fail(2, "addrport_to_anyname: %s", strerror(errno));
+
+	/*To get Service as formated -- "-t/-u VIP:VPORT" */
+	sprintf(svc_name, "%s %s", d->protocol == IPPROTO_TCP?"-t":"-u", vname);
+
+	for(i = 0; i < d->num_laddrs; i++){
+		/*To Get one local address which is belonged to this svc*/
+		sprintf(laddr, "%u.%u.%u.%u" , PRINT_NIP(d->entrytable[i].addr.ip));
+		printf("-P %s -z %s\n", svc_name, laddr);
+	}
+
+	free(vname);
 }
 
 
@@ -1723,7 +1779,7 @@ static int list_laddrs(ipvs_service_t *svc , int with_title)
 }
 
 
-static int list_all_laddrs(void)
+static int list_all_laddrs(unsigned int format)
 {
 	struct ip_vs_get_services *get;
 	struct ip_vs_get_laddrs   *d;
@@ -1741,19 +1797,24 @@ static int list_all_laddrs(void)
 			fprintf(stderr, "%s\n", ipvs_strerror(errno));
 			return -1;
 		}
-		
+
+		if(format & FMT_RULE){
+			print_laddrs_rules(d, format & FMT_NUMERIC);
+
+			free(d);
+			continue;
+		}
+
 		if(i != 0)
 			title_enable = 0;
 		print_service_and_laddrs(d, title_enable);
 
 		free(d);
 	}
-	
+
 	free(get);
 	return 0;
-
 }
-
 
 static void list_service(ipvs_service_t *svc, unsigned int format)
 {

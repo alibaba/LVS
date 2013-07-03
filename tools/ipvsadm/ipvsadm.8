@@ -424,6 +424,21 @@ One-packet scheduling.
 Used in conjunction with a UDP virtual service or
 a fwmark virtual service that handles only UDP packets.
 All connections are created such that they only schedule one packet.
+.TP
+.B -j [enable/disable], --synproxy [enable/disable]
+Synproxy switch.
+Enable or disable ipvs synproxy to defense tcp flag attack.
+This command is only relevant for the -A or -E command. Default
+is synproxy disable.
+.TP
+.B -V, --vsestablish-timeout [timeout]
+Specify timeout when session created by the virtual service transited to establish state.
+If this option is not specified, virtual service will use global establish state timeout
+when create session. Global estalish state timeout is set by user in proc filesystem, and you
+can find it and other states timeout in /proc/sys/net/ipv4/vs/timeout_*.
+.sp
+\fBNote:\fR  Set Zero value from user will force ipvs kernel use global establish state timeout
+for related virtual service.
 .SH EXAMPLE 1 - Simple Virtual Service
 The following commands configure a Linux Director to distribute
 incoming requests addressed to port 80 on 207.175.44.110 equally to

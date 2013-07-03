@@ -287,7 +287,7 @@ smtp_final(thread_t *thread, int error, const char *format, ...)
 	
 	if (error) {
 		/* Always syslog the error when the real server is up */
-                if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+                if (svr_checker_up(checker->id, checker->rs)) {
 			if (format != NULL) {
 				memcpy(error_buff, "SMTP_CHECK ", 11);
 				va_start(varg_list, format);
@@ -318,7 +318,7 @@ smtp_final(thread_t *thread, int error, const char *format, ...)
 		 * be noted that smtp_alert makes a copy of the string arguments, so
 		 * we don't have to keep them statically allocated.
 		 */
-                if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+                if (svr_checker_up(checker->id, checker->rs)) {
 			if (format != NULL) {
 				snprintf(smtp_buff, 542, "=> CHECK failed on service : %s <=",
 					 error_buff + 11);
@@ -789,7 +789,7 @@ smtp_connect_thread(thread_t *thread)
 	 * will be reset and we will continue on checking them one by one.
 	 */
 	if ((smtp_checker->host_ptr = list_element(smtp_checker->host, smtp_checker->host_ctr)) == NULL) {
-		if (!svr_checker_up(UP, checker->id, checker->rs)) {
+		if (!svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "Remote SMTP server [%s:%d] succeed on service."
 					    , inet_sockaddrtos(&checker->rs->addr)
 					    , ntohs(inet_sockaddrport(&checker->rs->addr)));

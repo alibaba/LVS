@@ -287,7 +287,7 @@ struct ip_vs_protocol {
 			     struct ip_vs_protocol * pp,
 			     struct ip_vs_conn * cp);
 
-	int (*fnat_in_handler) (struct sk_buff ** skb_p,
+	int (*fnat_in_handler) (struct sk_buff * skb,
 				struct ip_vs_protocol * pp,
 				struct ip_vs_conn * cp);
 
@@ -381,6 +381,8 @@ struct ip_vs_conn {
 					 * state transition triggerd
 					 * synchronization
 					 */
+	u16 cpuid;
+
 	/* Control members */
 	struct ip_vs_conn *control;	/* Master control connection */
 	atomic_t n_control;	/* Number of controlled ones */
@@ -424,8 +426,19 @@ struct ip_vs_conn {
 
 	/* L2 direct response xmit */
 	struct net_device	*indev;
-	unsigned char		src_hwaddr[MAX_ADDR_LEN];
-	unsigned char		dst_hwaddr[MAX_ADDR_LEN];
+	unsigned char		src_hwaddr[ETH_ALEN];
+	unsigned char		dst_hwaddr[ETH_ALEN];
+	struct net_device	*dev_inside;
+	unsigned char		src_hwaddr_inside[ETH_ALEN];
+	unsigned char		dst_hwaddr_inside[ETH_ALEN];
+
+	int est_timeout;	/* Now, we decide that every VS
+				 * should have its private
+				 * establish state timeout for user requirement.
+				 * Each conn inherit this value from VS and
+				 * set this value into conn timer
+				 * when state change to establishment
+				 */
 };
 
 /*
@@ -449,6 +462,7 @@ struct ip_vs_service_user_kern {
 	unsigned flags;		/* virtual service flags */
 	unsigned timeout;	/* persistent timeout in sec */
 	u32 netmask;		/* persistent netmask */
+	unsigned est_timeout;	/* vs private establish state timeout */
 };
 
 struct ip_vs_dest_user_kern {
@@ -477,7 +491,6 @@ struct ip_vs_service {
 	struct list_head s_list;	/* for normal service table */
 	struct list_head f_list;	/* for fwmark-based service table */
 	atomic_t refcnt;	/* reference counter */
-	atomic_t usecnt;	/* use counter */
 
 	u16 af;			/* address family */
 	__u16 protocol;		/* which protocol (TCP/UDP) */
@@ -491,6 +504,7 @@ struct ip_vs_service {
 	/* for realservers list */
 	struct list_head destinations;	/* real server d-linked list */
 	__u32 num_dests;	/* number of servers */
+	long weight;           /* sum of servers weight */
 
 	/* for local ip address list, now only used in FULL NAT model */
 	struct list_head laddr_list;	/* local ip address list */
@@ -498,13 +512,18 @@ struct ip_vs_service {
 	__u32 num_laddrs;	/* number of local ip address */
 	struct list_head *curr_laddr;	/* laddr data list head */
 
-	struct ip_vs_stats *stats;	/* Use per-cpu statistics for the service */
+	struct ip_vs_stats stats;	/* statistics for the service */
 	struct ip_vs_app *inc;	/* bind conns to this app inc */
 
 	/* for scheduling */
 	struct ip_vs_scheduler *scheduler;	/* bound scheduler object */
 	rwlock_t sched_lock;	/* lock sched_data */
 	void *sched_data;	/* scheduler application data */
+
+	/* for VS private establish state timeout, it should be inherited by every connection data structure */
+	unsigned est_timeout;
+
+	struct ip_vs_service *svc0;	/* the svc of cpu0 */
 };
 
 /*
@@ -523,7 +542,7 @@ struct ip_vs_dest {
 	atomic_t weight;	/* server weight */
 
 	atomic_t refcnt;	/* reference counter */
-	struct ip_vs_stats *stats;	/* Use per-cpu statistics for destination server */
+	struct ip_vs_stats stats;	/* statistics for destination server */
 
 	/* connection counters and thresholds */
 	atomic_t activeconns;	/* active connections */
@@ -551,6 +570,7 @@ struct ip_vs_dest {
 struct ip_vs_laddr {
 	struct list_head n_list;	/* for the local address in the service */
 	u16 af;			/* address family */
+	u16 cpuid;		/* record the cpu laddr has been assigned */
 	union nf_inet_addr addr;	/* ip address */
 	atomic64_t port;	/* port counts */
 	atomic_t refcnt;	/* reference count */
@@ -710,6 +730,9 @@ enum {
 	FAST_XMIT_NO_MAC,
 	FAST_XMIT_SYNPROXY_SAVE,
 	FAST_XMIT_DEV_LOST,
+	FAST_XMIT_REJECT_INSIDE,
+	FAST_XMIT_PASS_INSIDE,
+	FAST_XMIT_SYNPROXY_SAVE_INSIDE,
 	RST_IN_SYN_SENT,
 	RST_OUT_SYN_SENT,
 	RST_IN_ESTABLISHED,
@@ -718,6 +741,8 @@ enum {
 	LRO_REJECT,
 	XMIT_UNEXPECTED_MTU,
 	CONN_SCHED_UNREACH,
+	SYNPROXY_NO_DEST,
+	CONN_EXCEEDED,
 	IP_VS_EXT_STAT_LAST
 };
 
@@ -767,7 +792,8 @@ extern void ip_vs_init_hash_table(struct list_head *table, int rows);
 #define CONFIG_IP_VS_TAB_BITS   22
 #endif
 
-#define IP_VS_CONN_TAB_BITS	CONFIG_IP_VS_TAB_BITS
+//#define IP_VS_CONN_TAB_BITS	CONFIG_IP_VS_TAB_BITS
+#define IP_VS_CONN_TAB_BITS	20
 #define IP_VS_CONN_TAB_SIZE     (1 << IP_VS_CONN_TAB_BITS)
 #define IP_VS_CONN_TAB_MASK     (IP_VS_CONN_TAB_SIZE - 1)
 
@@ -954,6 +980,12 @@ extern int sysctl_ip_vs_tcp_drop_entry;
 extern int sysctl_ip_vs_udp_drop_entry;
 extern int sysctl_ip_vs_conn_expire_tcp_rst;
 extern int sysctl_ip_vs_fast_xmit;
+extern int sysctl_ip_vs_fast_xmit_inside;
+extern int sysctl_ip_vs_csum_offload;
+extern int sysctl_ip_vs_reserve_core;
+extern int sysctl_ip_vs_conn_max_num;
+
+DECLARE_PER_CPU(spinlock_t, ip_vs_svc_lock);
 
 extern struct ip_vs_service *ip_vs_service_get(int af, __u32 fwmark,
 					       __u16 protocol,
@@ -964,7 +996,8 @@ extern struct ip_vs_service *ip_vs_lookup_vip(int af, __u16 protocol,
 
 static inline void ip_vs_service_put(struct ip_vs_service *svc)
 {
-	atomic_dec(&svc->usecnt);
+	if (likely(svc != NULL))
+		spin_unlock(&__get_cpu_var(ip_vs_svc_lock));
 }
 
 extern struct ip_vs_dest *ip_vs_lookup_real_service(int af, __u16 protocol,

@@ -559,6 +559,8 @@ ipvs_set_rule(int cmd, virtual_server * vs, real_server * rs)
 				    , inet_ntop2(inet_sockaddrip4(&vs->addr))
 				    , ntohs(inet_sockaddrport(&vs->addr)));
 
+	srule->est_timeout = atoi(vs->est_timeout);
+
 	if (srule->timeout != 0 || vs->granularity_persistence)
 		srule->flags = IP_VS_SVC_F_PERSISTENT;
 
@@ -567,7 +569,7 @@ ipvs_set_rule(int cmd, virtual_server * vs, real_server * rs)
 			srule->netmask = vs->granularity_persistence;
 
 	if(vs->syn_proxy)
-		srule->flags |= IP_VS_CONN_F_SYNPROXY;
+		srule->flags |= IP_VS_SVC_F_SYNPROXY;
 
 	/* SVR specific */
 	if (rs) {
@@ -655,6 +657,11 @@ ipvs_laddr_vsg_cmd(int cmd, list vs_group, virtual_server * vs, local_addr_group
 	l = vsg->addr_ip;
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vsg_entry = ELEMENT_DATA(e);
+		/* reloading may make laddr_set true  */
+		if (vsg_entry->laddr_set && (cmd == IP_VS_SO_SET_ADDLADDR))
+			continue;
+
+		vsg_entry->laddr_set = (cmd == IP_VS_SO_SET_ADDLADDR) ? 1:0;
 
 		srule->af = vsg_entry->addr.ss_family;
 		if (srule->af == AF_INET6) {
@@ -674,7 +681,12 @@ ipvs_laddr_vsg_cmd(int cmd, list vs_group, virtual_server * vs, local_addr_group
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vsg_entry = ELEMENT_DATA(e);
 		uint32_t addr_ip, ip;
-		
+
+		if (vsg_entry->laddr_set && (cmd == IP_VS_SO_SET_ADDLADDR))
+			continue;
+
+		vsg_entry->laddr_set = (cmd == IP_VS_SO_SET_ADDLADDR) ? 1:0;
+
 		srule->af = vsg_entry->addr.ss_family;
 		if (srule->af == AF_INET6) {
 			inet_sockaddrip6(&vsg_entry->addr, &srule->addr.in6);
@@ -782,7 +794,162 @@ ipvs_cmd(int cmd, list vs_group, virtual_server * vs, real_server * rs)
 	return IPVS_SUCCESS;
 }
 
-static void 
+
+static void
+ipvs_new_laddr_vsg(virtual_server *vs)
+{
+	list l;
+	element e;
+	virtual_server_group *vsg;
+	virtual_server_group_entry *vsg_entry;
+
+	vsg = ipvs_get_group_by_name(vs->vsgname, check_data->vs_group);
+	if (!vsg) return;
+
+	/* visit addr_ip list */
+	l = vsg->addr_ip;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+
+		/* will be set later */
+		if (!ISALIVE(vsg_entry))
+			continue;
+
+		srule->af = vsg_entry->addr.ss_family;
+		if (srule->af == AF_INET6) {
+			if (srule->netmask == 0xffffffff)
+				srule->netmask = 128;
+			inet_sockaddrip6(&vsg_entry->addr, &srule->addr.in6);
+		} else
+			srule->addr.ip = inet_sockaddrip4(&vsg_entry->addr);
+		srule->port = inet_sockaddrport(&vsg_entry->addr);
+
+		/* local address group channel */
+		ipvs_talk(IP_VS_SO_SET_ADDLADDR);
+	}
+
+	/* visit range list */
+	l = vsg->range;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		vsg_entry = ELEMENT_DATA(e);
+		uint32_t addr_ip, ip;
+
+		/* will be set later */
+		if (!ISALIVE(vsg_entry))
+			continue;
+
+		srule->af = vsg_entry->addr.ss_family;
+		if (srule->af == AF_INET6) {
+			inet_sockaddrip6(&vsg_entry->addr, &srule->addr.in6);
+			ip = srule->addr.in6.s6_addr32[3];
+		} else {
+			ip = inet_sockaddrip4(&vsg_entry->addr);
+		}
+
+		/* Parse the whole range */
+		for (addr_ip = ip;
+		     ((addr_ip >> 24) & 0xFF) <= vsg_entry->range;
+		     addr_ip += 0x01000000) {
+			if (srule->af == AF_INET6) {
+				if (srule->netmask == 0xffffffff)
+					srule->netmask = 128;
+				srule->addr.in6.s6_addr32[3] = addr_ip;
+			} else {
+				srule->addr.ip = addr_ip;
+			}
+			srule->port = inet_sockaddrport(&vsg_entry->addr);
+
+			ipvs_talk(IP_VS_SO_SET_ADDLADDR);
+		}
+	}
+}
+
+void
+ipvs_new_laddr_add(virtual_server *vs, local_addr_group *laddr_group)
+{
+	local_addr_entry *laddr_entry;
+	list l;
+	element e;
+
+	/* the unalive vs will be set later*/
+	if (!vs->vsgname && !ISALIVE(vs))
+		return;
+
+	memset(srule, 0, sizeof(ipvs_service_t));
+	srule->netmask = (vs->addr.ss_family == AF_INET6) ? 128 : ((u_int32_t) 0xffffffff);
+	srule->protocol = vs->service_type;
+
+	l = laddr_group->addr_ip;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		laddr_entry = ELEMENT_DATA(e);
+		if (ISALIVE(laddr_entry))
+			continue;
+
+		memset(laddr_rule, 0, sizeof(ipvs_laddr_t));
+		laddr_rule->af = laddr_entry->addr.ss_family;
+		if (laddr_entry->addr.ss_family == AF_INET6)
+			inet_sockaddrip6(&laddr_entry->addr, &laddr_rule->addr.in6);
+		else
+			laddr_rule->addr.ip = inet_sockaddrip4(&laddr_entry->addr);
+
+		if (vs->vsgname) {
+			ipvs_new_laddr_vsg(vs);
+		} else {
+			srule->af = vs->addr.ss_family;
+			if (srule->af == AF_INET6)
+				inet_sockaddrip6(&vs->addr, &srule->addr.in6);
+			else
+				srule->addr.ip = inet_sockaddrip4(&vs->addr);
+			srule->port = inet_sockaddrport(&vs->addr);
+
+			/* local address group channel */
+			ipvs_talk(IP_VS_SO_SET_ADDLADDR);
+		}
+	}
+
+	l = laddr_group->range;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		laddr_entry = ELEMENT_DATA(e);
+		uint32_t addr_ip, ip;
+
+		if (ISALIVE(laddr_entry))
+			 continue;
+
+		memset(laddr_rule, 0, sizeof(ipvs_laddr_t));
+		laddr_rule->af = laddr_entry->addr.ss_family;
+
+		if (laddr_entry->addr.ss_family == AF_INET6) {
+			inet_sockaddrip6(&laddr_entry->addr, &laddr_rule->addr.in6);
+			ip = laddr_rule->addr.in6.s6_addr32[3];
+		} else {
+			ip = inet_sockaddrip4(&laddr_entry->addr);
+		}
+
+		for (addr_ip = ip; ((addr_ip >> 24) & 0xFF) <= laddr_entry->range;
+						     addr_ip += 0x01000000) {
+			if (laddr_entry->addr.ss_family == AF_INET6)
+				laddr_rule->addr.in6.s6_addr32[3] = addr_ip;
+			else
+				laddr_rule->addr.ip = addr_ip;
+
+			if (vs->vsgname) {
+				ipvs_new_laddr_vsg(vs);
+			} else {
+				srule->af = vs->addr.ss_family;
+				if (srule->af == AF_INET6)
+					inet_sockaddrip6(&vs->addr, &srule->addr.in6);
+				else
+					srule->addr.ip = inet_sockaddrip4(&vs->addr);
+				srule->port = inet_sockaddrport(&vs->addr);
+
+				/* local address group channel */
+				ipvs_talk(IP_VS_SO_SET_ADDLADDR);
+			}
+		}
+	}
+}
+
+static void
 ipvs_rm_lentry_from_vsg(local_addr_entry *laddr_entry, char *vsgname)
 {
 	list l;
@@ -790,12 +957,16 @@ ipvs_rm_lentry_from_vsg(local_addr_entry *laddr_entry, char *vsgname)
 	virtual_server_group *vsg;
 	virtual_server_group_entry *vsg_entry;
 
+	/* it's not old_check_data. help to ISALIVE check later  */
 	vsg = ipvs_get_group_by_name(vsgname, check_data->vs_group);
 	if (!vsg) return;
 
 	l = vsg->addr_ip;
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vsg_entry = ELEMENT_DATA(e);
+		if (!ISALIVE(vsg_entry))
+			continue;
+
 		srule->af = vsg_entry->addr.ss_family;
 		if (vsg_entry->addr.ss_family == AF_INET6) {
 			srule->netmask = 128;
@@ -824,6 +995,8 @@ ipvs_rm_lentry_from_vsg(local_addr_entry *laddr_entry, char *vsgname)
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		vsg_entry = ELEMENT_DATA(e);
 		uint32_t addr_ip, ip;
+		if (!ISALIVE(vsg_entry))
+			continue;
 
 		srule->af = vsg_entry->addr.ss_family;
 		srule->netmask = (vsg_entry->addr.ss_family == AF_INET6) ? 128 : ((u_int32_t) 0xffffffff);

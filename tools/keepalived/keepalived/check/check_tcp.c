@@ -115,7 +115,7 @@ tcp_check_thread(thread_t * thread)
 	if (status == connect_success) {
 		close(thread->u.fd);
 
-		if (!svr_checker_up(UP, checker->id, checker->rs)) {
+		if (!svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "TCP connection to [%s]:%d success."
 					    , inet_sockaddrtos(&tcp_check->dst)
 					    , ntohs(inet_sockaddrport(&tcp_check->dst)));
@@ -129,7 +129,7 @@ tcp_check_thread(thread_t * thread)
 
 	} else {
 
-		if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+		if (svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "TCP connection to [%s]:%d failed !!!"
 					    , inet_sockaddrtos(&tcp_check->dst)
 					    , ntohs(inet_sockaddrport(&tcp_check->dst)));

@@ -94,6 +94,7 @@ extern void ipvs_stop(void);
 extern virtual_server_group *ipvs_get_group_by_name(char *, list);
 extern int ipvs_group_remove_entry(virtual_server *, virtual_server_group_entry *);
 extern local_addr_group *ipvs_get_laddr_group_by_name(char *, list);
+extern void ipvs_new_laddr_add(virtual_server *, local_addr_group *);
 extern int ipvs_laddr_remove_entry(virtual_server *, local_addr_entry *);
 extern int ipvs_cmd(int, list, virtual_server *, real_server *);
 extern int ipvs_syncd_cmd(int, char *, int, int);

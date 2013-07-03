@@ -181,7 +181,7 @@ misc_check_child_thread(thread_t * thread)
 		pid = THREAD_CHILD_PID(thread);
 
 		/* The child hasn't responded. Kill it off. */
-		if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+		if (svr_checker_up(checker->id, checker->rs)) {
 			log_message(LOG_INFO, "Misc check to [%s] for [%s] timed out"
 					    , inet_sockaddrtos(&checker->rs->addr)
 					    , misck_checker->path);
@@ -215,7 +215,7 @@ misc_check_child_thread(thread_t * thread)
 				update_svr_wgt(status - 2, checker->vs, checker->rs);
 
 			/* everything is good */
-			if (!svr_checker_up(UP, checker->id, checker->rs)) {
+			if (!svr_checker_up(checker->id, checker->rs)) {
 				log_message(LOG_INFO, "Misc check to [%s] for [%s] success."
 						    , inet_sockaddrtos(&checker->rs->addr)
 						    , misck_checker->path);
@@ -227,7 +227,7 @@ misc_check_child_thread(thread_t * thread)
 							   , checker->rs);
 			}
 		} else {
-			if (svr_checker_up(DOWN, checker->id, checker->rs)) {
+			if (svr_checker_up(checker->id, checker->rs)) {
 				log_message(LOG_INFO, "Misc check to [%s] for [%s] failed."
 						    , inet_sockaddrtos(&checker->rs->addr)
 						    , misck_checker->path);

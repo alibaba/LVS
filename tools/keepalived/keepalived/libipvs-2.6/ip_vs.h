@@ -29,7 +29,8 @@
 #define IP_VS_SVC_F_PERSISTENT	0x0001		/* persistent port */
 #define IP_VS_SVC_F_HASHED	0x0002		/* hashed entry */
 #define IP_VS_SVC_F_ONEPACKET	0x0004		/* one-packet scheduling */
-#define IP_VS_CONN_F_SYNPROXY	0x8000		/* synproxy switch flag*/
+#define IP_VS_SVC_F_SYNPROXY    0x8000		/* synproxy switch flag */
+
 
 /*
  *      IPVS sync daemon states
@@ -95,6 +96,7 @@
 #define IP_VS_CONN_F_NO_CPORT	0x0800		/* no client port set yet */
 #define IP_VS_CONN_F_TEMPLATE	0x1000		/* template, not connection */
 #define IP_VS_CONN_F_ONE_PACKET	0x2000		/* forward only one packet */
+#define IP_VS_CONN_F_SYNPROXY	0x8000          /* synproxy switch flag */
 
 #define IP_VS_SCHEDNAME_MAXLEN	16
 #define IP_VS_PENAME_MAXLEN	16
@@ -143,6 +145,7 @@ struct ip_vs_service_user {
 	u_int16_t		af;
 	union nf_inet_addr	addr;
 	char			pe_name[IP_VS_PENAME_MAXLEN];
+	unsigned		est_timeout;    /* virtual service private establish timeout */
 };
 
 struct ip_vs_dest_kern {
@@ -265,7 +268,7 @@ struct ip_vs_service_entry {
 	u_int16_t		af;
 	union nf_inet_addr	addr;
 	char			pe_name[IP_VS_PENAME_MAXLEN];
-
+	unsigned		est_timeout;    /* vs private establish timeout */
 };
 
 struct ip_vs_dest_entry_kern {
@@ -505,6 +508,7 @@ enum {
 	IPVS_SVC_ATTR_NETMASK,		/* persistent netmask */
 
 	IPVS_SVC_ATTR_STATS,		/* nested attribute for service stats */
+	IPVS_SVC_ATTR_EST_TIMEOUT,      /* establish timeout */
 
 	IPVS_SVC_ATTR_PE_NAME,		/* name of scheduler */
 

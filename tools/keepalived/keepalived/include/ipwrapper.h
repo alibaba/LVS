@@ -53,7 +53,7 @@
 /* prototypes */
 extern void perform_svr_state(int, virtual_server *, real_server *);
 extern void update_svr_wgt(int, virtual_server *, real_server *);
-extern int svr_checker_up(int, checker_id_t, real_server *);
+extern int svr_checker_up(checker_id_t, real_server *);
 extern void update_svr_checker_state(int, checker_id_t, virtual_server *, real_server *);
 extern int init_services(void);
 extern int clear_services(void);

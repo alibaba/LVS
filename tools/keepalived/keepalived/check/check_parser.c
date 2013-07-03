@@ -135,6 +135,19 @@ pto_handler(vector strvec)
 	memcpy(vs->timeout_persistence, str, size);
 }
 static void
+eto_handler(vector strvec)
+{
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	char *str = VECTOR_SLOT(strvec, 1);
+	int size = sizeof (vs->est_timeout);
+	int str_len = strlen(str);
+
+	if (size > str_len)
+		size = str_len;
+
+	memcpy(vs->est_timeout, str, size);
+}
+static void
 pgr_handler(vector strvec)
 {
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
@@ -319,6 +332,7 @@ check_init_keywords(void)
 	install_keyword("lvs_method", &lbkind_handler);
 	install_keyword("nat_mask", &natmask_handler);
 	install_keyword("persistence_timeout", &pto_handler);
+	install_keyword("est_timeout", &eto_handler);
 	install_keyword("persistence_granularity", &pgr_handler);
 	install_keyword("protocol", &proto_handler);
 	install_keyword("ha_suspend", &hasuspend_handler);

@@ -1022,9 +1022,15 @@ void __devinit ixgbe_check_options(struct ixgbe_adapter *adapter)
 
 		/* limit the number of queues for FDIR using RSS param */
 		if (feature[RING_F_RSS].indices && num_RSS > bd && RSS[bd])
+		{
 			feature[RING_F_FDIR].indices =
-						feature[RING_F_RSS].indices;
+				min_t(int, num_online_cpus(),
+					feature[RING_F_FDIR].indices);
 
+			DPRINTK(PROBE, INFO, "FDIR.indices:%d, RSS.indices:%d\n",
+					feature[RING_F_FDIR].indices,
+					feature[RING_F_RSS].indices);
+		}
 no_flow_director:
 		/* empty code line with semi-colon */ ;
 	}
