@@ -1,0 +1,10 @@
+LVS_v1 [2012-06-18]
+kernel-ipvs
+* Feature: FULLNAT,a new packet forwarding method;
+* Feature: SYNPROXY,defense mechanism against synflooding attack;
+* Feature: defense mechanism against other-tcp-flag flooding attack;
+tools-keepalived
+* Feature: support FULLNAT and SYNPROXY;
+* Change: select replaced by epoll;
+tools-ipvsadm
+* Feature: support FULLNAT and SYNPROXY;
