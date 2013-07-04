@@ -1,0 +1,32 @@
+LVS_v3 [Beta,master branch,2013-07-01]
+kernel-ipvs
+* Feature: control and data flow separation;
+* Feature: tcp eatablished timeout can be set per-vip;
+* Change: all ipvs resources allocation per cpu;
+* Change: sha1 replaced by md5 in synproxy;
+* Bugfix: synproxy cookies check error when packets out of order;
+
+LVS_v2 [2012-09-25]
+kernel-ipvs
+* Feature: support GRO;
+* Featrue: FULLNAT support IPV6;
+* Change: HOOK on pre-routing;
+* Change: packets to client by L2 forwarding;
+* Change: delete rate statistic modules;
+* Bugfix: toa insert fails when packets out of order; 
+* Bugfix: tcp seq error in icmp packet;
+* Bugfix: port translation error when synproxy on;
+* Bugfix: tcp checksum error when vport and dport different;
+tools-keepalived
+* Feature: add/delete vip automatically;
+
+LVS_v1 [2012-06-18]
+kernel-ipvs
+* Feature: FULLNAT,a new packet forwarding method;
+* Feature: SYNPROXY,defense mechanism against synflooding attack;
+* Feature: defense mechanism against other-tcp-flag flooding attack;
+tools-keepalived
+* Feature: support FULLNAT and SYNPROXY;
+* Change: select replaced by epoll;
+tools-ipvsadm
+* Feature: support FULLNAT and SYNPROXY;
