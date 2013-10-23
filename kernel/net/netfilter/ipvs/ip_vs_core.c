@@ -745,7 +745,7 @@ handle_response(int af, struct sk_buff *skb, struct ip_vs_protocol *pp,
 	/*
 	 * Syn-proxy step 3 logic: receive syn-ack from rs.
 	 */
-	if (ip_vs_synproxy_synack_rcv(skb, cp, pp, ihl, &ret) == 0) {
+	if (pp->protocol == IPPROTO_TCP && ip_vs_synproxy_synack_rcv(skb, cp, pp, ihl, &ret) == 0) {
 		goto out;
 	}
 
@@ -1304,12 +1304,19 @@ ip_vs_pre_routing(unsigned int hooknum, struct sk_buff *skb,
 	ip_vs_fill_iphdr(af, skb_network_header(skb), &iph);
 
 	/* drop all ip fragment except ospf */
-	if ((sysctl_ip_vs_frag_drop_entry == 1)
-	    && (af == AF_INET)
+	if ((af == AF_INET)
 	    && (ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET))
 	    && (iph.protocol != IPPROTO_OSPF)) {
-		IP_VS_INC_ESTATS(ip_vs_esmib, DEFENCE_IP_FRAG_DROP);
-		return NF_DROP;
+		if(sysctl_ip_vs_frag_drop_entry == 1) {
+			IP_VS_INC_ESTATS(ip_vs_esmib, DEFENCE_IP_FRAG_DROP);
+			return NF_DROP;
+		} else {
+			if (ip_vs_gather_frags(skb, IP_DEFRAG_VS_IN))
+				return NF_STOLEN;
+
+			IP_VS_INC_ESTATS(ip_vs_esmib, DEFENCE_IP_FRAG_GATHER);
+			ip_vs_fill_iphdr(af, skb_network_header(skb), &iph);
+		}
 	}
 
 	/* drop udp packet which send to tcp-vip */

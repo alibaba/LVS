@@ -143,7 +143,7 @@ static int ip_vs_port_try_max = 60000;
 /*
  * sysctl for DEFENCE ATTACK
  */
-int sysctl_ip_vs_frag_drop_entry = 1;
+int sysctl_ip_vs_frag_drop_entry = 0;
 int sysctl_ip_vs_tcp_drop_entry = 1;
 int sysctl_ip_vs_udp_drop_entry = 1;
 /* send rst when tcp session expire */
@@ -2519,6 +2519,7 @@ static struct ip_vs_estats_entry ext_stats[] = {
 	IP_VS_ESTATS_ITEM("synproxy_conn_reused_lastack",
 			  SYNPROXY_CONN_REUSED_LASTACK),
 	IP_VS_ESTATS_ITEM("defence_ip_frag_drop", DEFENCE_IP_FRAG_DROP),
+	IP_VS_ESTATS_ITEM("defence_ip_frag_gather", DEFENCE_IP_FRAG_GATHER),
 	IP_VS_ESTATS_ITEM("defence_tcp_drop", DEFENCE_TCP_DROP),
 	IP_VS_ESTATS_ITEM("defence_udp_drop", DEFENCE_UDP_DROP),
 	IP_VS_ESTATS_ITEM("fast_xmit_reject", FAST_XMIT_REJECT),
