@@ -17,7 +17,8 @@
 RETVAL=0
 
 prog="keepalived"
-
+VRRP_PID_FILE=/var/run/vrrp.pid
+CHECKERS_PID_FILE=/var/run/checkers.pid
 start() {
     echo -n $"Starting $prog: "
     daemon keepalived ${KEEPALIVED_OPTIONS}
@@ -26,11 +27,32 @@ start() {
     [ $RETVAL -eq 0 ] && touch /var/lock/subsys/$prog
 }
 
+check_stop() {
+	local cnt=0
+	while checkpid $1 2>&1
+	do
+		let "cnt++"
+		if [ $cnt -gt 2 ];then
+			break
+		fi
+		sleep 1
+	done
+}
+
 stop() {
+	local vrrppid checkerpid
+	if [ -f "$VRRP_PID_FILE" ];then
+		vrrppid=`cat $VRRP_PID_FILE`
+	fi
+	if [ -f "$CHECKERS_PID_FILE" ]; then
+		chkerspid=`cat $CHECKERS_PID_FILE`
+	fi
     echo -n $"Stopping $prog: "
     killproc keepalived
     RETVAL=$?
     echo
+	check_stop "$chkerspid"
+	check_stop "$vrrppid"
     [ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/$prog
 }
 

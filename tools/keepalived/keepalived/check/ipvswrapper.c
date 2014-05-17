@@ -344,6 +344,7 @@ static ipvs_service_t *srule;
 static ipvs_dest_t *drule;
 static ipvs_daemon_t *daemonrule;
 static ipvs_laddr_t *laddr_rule;
+static ipvs_snat_dest_t *sdrule;
 
 /* Initialization helpers */
 int
@@ -364,6 +365,7 @@ ipvs_start(void)
 	drule = (ipvs_dest_t *) MALLOC(sizeof(ipvs_dest_t));
 	daemonrule = (ipvs_daemon_t *) MALLOC(sizeof(ipvs_daemon_t));
 	laddr_rule = (ipvs_laddr_t *) MALLOC(sizeof(ipvs_laddr_t));
+	sdrule = (ipvs_snat_dest_t *)MALLOC(sizeof(ipvs_snat_dest_t));
 	return IPVS_SUCCESS;
 }
 
@@ -375,6 +377,7 @@ ipvs_stop(void)
 	FREE(drule);
 	FREE(daemonrule);
 	FREE(laddr_rule);
+	FREE(sdrule);
 	ipvs_close();
 }
 
@@ -417,13 +420,27 @@ ipvs_talk(int cmd)
 			break;
 		case IP_VS_SO_SET_EDITDEST:
 			if ((result = ipvs_update_dest(srule, drule)) &&
-			    (errno == ENOENT))
+			    (errno == ENOENT)) {
 				result = ipvs_add_dest(srule, drule);
+			}
+			break;
+		case IP_VS_SO_SET_ADDSNAT:
+			result = ipvs_add_snat_dest(srule, sdrule);
+			break;
+		case  IP_VS_SO_SET_EDITSNAT:
+			if ((result = ipvs_update_snat_dest(srule, sdrule)) &&
+			    (errno == ENOENT)) {
+				result = ipvs_add_snat_dest(srule, sdrule);
+			}
+			break;
+		case IP_VS_SO_SET_DELSNAT:
+			result = ipvs_del_snat_dest(srule, sdrule);
 			break;
 	}
 
-	if (result)
+	if (result) {
 		log_message(LOG_INFO, "IPVS: %s", ipvs_strerror(errno));
+}
 }
 
 int
@@ -494,11 +511,13 @@ ipvs_group_cmd(int cmd, list vs_group, real_server * rs, char * vsgname)
 		vsg_entry = ELEMENT_DATA(e);
 		srule->af = vsg_entry->addr.ss_family;
 		if (vsg_entry->addr.ss_family == AF_INET6) {
-			if (srule->netmask == 0xffffffff)
+		if (srule->netmask == 0xffffffff) {
 				srule->netmask = 128;
+		}
 			inet_sockaddrip6(&vsg_entry->addr, &srule->addr.in6);
-		} else
+		} else {
 			srule->addr.ip = inet_sockaddrip4(&vsg_entry->addr);
+		}
 		srule->port = inet_sockaddrport(&vsg_entry->addr);
 
 		/* Talk to the IPVS channel */
@@ -535,6 +554,47 @@ ipvs_group_cmd(int cmd, list vs_group, real_server * rs, char * vsgname)
 		if (IPVS_ALIVE(cmd, vsg_entry, rs)) {
 			ipvs_group_range_cmd(cmd, vsg_entry);
 			IPVS_SET_ALIVE(cmd, vsg_entry);
+		}
+	}
+}
+
+
+void
+ipvs_set_snat_rule(int cmd, virtual_server *vs, snat_rule *rs)
+{
+	memset(sdrule, 0, sizeof(ipvs_snat_dest_t));
+	strncpy(srule->sched_name, vs->sched, IP_VS_SCHEDNAME_MAXLEN);
+	srule->netmask = (vs->addr.ss_family == AF_INET6) ? 128 : ((u_int32_t) 0xffffffff);
+	srule->protocol = vs->service_type;
+
+	if (!parse_timeout(vs->timeout_persistence, &srule->timeout)) {
+		log_message(LOG_INFO, "IPVS : Virtual service -f [%d] illegal timeout\n", vs->vfwmark);
+	}
+
+	if (srule->timeout != 0 || vs->granularity_persistence) {
+		srule->flags = IP_VS_SVC_F_PERSISTENT;
+	}
+	
+	if (vs->syn_proxy) {
+	    srule->flags |= IP_VS_CONN_F_SYNPROXY;
+	}
+
+	if (rs) {
+		if (cmd == IP_VS_SO_SET_ADDSNAT || 
+		    cmd == IP_VS_SO_SET_DELSNAT ||
+		    cmd == IP_VS_SO_SET_EDITSNAT) {
+		    sdrule->af = rs->af;
+		    sdrule->saddr = rs->saddr;
+		    sdrule->smask = rs->smask;
+		    sdrule->daddr = rs->daddr;
+		    sdrule->dmask = rs->dmask;
+		    sdrule->gw = rs->gw;
+		    sdrule->conn_flags = rs->conn_flags;
+		    sdrule->algo = rs->algo;
+		    sdrule->new_gw = rs->new_gw;
+		    strcpy(sdrule->out_dev, rs->out_dev);
+		    sdrule->min_ip = rs->minip;
+		    sdrule->max_ip = rs->maxip;
 		}
 	}
 }
@@ -729,6 +789,30 @@ ipvs_laddr_cmd(int cmd, list vs_group, virtual_server * vs)
 			ipvs_laddr_group_cmd(cmd, laddr_group);
 		}
 	}
+
+	return IPVS_SUCCESS;
+}
+
+int
+ipvs_snat_cmd(int cmd, virtual_server *vs, snat_rule *rs)
+{
+	memset(srule, 0, sizeof(ipvs_service_t));
+	ipvs_set_snat_rule(cmd, vs, rs);
+
+	/* Set flag */
+	if (cmd == IP_VS_SO_SET_ADDSNAT && !rs->set) {
+		rs->set = 1;
+	}
+	    
+	if (cmd == IP_VS_SO_SET_DELSNAT && rs->set) {
+		rs->set = 0;
+	}
+
+	srule->af = AF_INET;
+	srule->fwmark = vs->vfwmark;
+
+	/* Talk to the IPVS channel */
+	ipvs_talk(cmd);
 
 	return IPVS_SUCCESS;
 }

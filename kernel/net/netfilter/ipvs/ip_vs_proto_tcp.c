@@ -712,8 +712,16 @@ static struct sk_buff *tcp_opt_add_toa(struct ip_vs_conn *cp,
 		return old_skb;
 	}
 
+	if (IS_SNAT_CP(cp))
+		return old_skb;
+
 	/* skb length and tcp option length checking */
+	if (old_skb->_skb_dst)
 	mtu = dst_mtu((struct dst_entry *)old_skb->_skb_dst);
+	else     /* fast_xmit can reach here */
+		mtu = cp->dev_inside ? cp->dev_inside->mtu :
+			sizeof(struct ip_vs_tcpo_addr);
+
 	if (old_skb->len > (mtu - sizeof(struct ip_vs_tcpo_addr))) {
 		IP_VS_INC_ESTATS(ip_vs_esmib, FULLNAT_ADD_TOA_FAIL_LEN);
 		return old_skb;
@@ -817,7 +825,12 @@ static struct sk_buff *tcp_opt_add_toa_v6(struct ip_vs_conn *cp,
 	}
 
 	/* skb length and tcph length checking */
+	if (old_skb->_skb_dst)
 	mtu = dst_mtu((struct dst_entry *)old_skb->_skb_dst);
+	else    /* fast_xmit can reach here */
+		mtu = cp->dev_inside ? cp->dev_inside->mtu :
+			sizeof(struct ip_vs_tcpo_addr_v6);
+
 	if (old_skb->len > (mtu - sizeof(struct ip_vs_tcpo_addr_v6))) {
 		IP_VS_INC_ESTATS(ip_vs_esmib, FULLNAT_ADD_TOA_FAIL_LEN);
 		return old_skb;
@@ -1394,11 +1407,11 @@ int sysctl_ip_vs_tcp_timeouts[IP_VS_TCP_S_LAST + 1] = {
 	[IP_VS_TCP_S_ESTABLISHED] = 90 * HZ,
 	[IP_VS_TCP_S_SYN_SENT] = 3 * HZ,
 	[IP_VS_TCP_S_SYN_RECV] = 30 * HZ,
-	[IP_VS_TCP_S_FIN_WAIT] = 3 * HZ,
-	[IP_VS_TCP_S_TIME_WAIT] = 3 * HZ,
+	[IP_VS_TCP_S_FIN_WAIT] = 7 * HZ,
+	[IP_VS_TCP_S_TIME_WAIT] = 7 * HZ,
 	[IP_VS_TCP_S_CLOSE] = 3 * HZ,
-	[IP_VS_TCP_S_CLOSE_WAIT] = 3 * HZ,
-	[IP_VS_TCP_S_LAST_ACK] = 3 * HZ,
+	[IP_VS_TCP_S_CLOSE_WAIT] = 7 * HZ,
+	[IP_VS_TCP_S_LAST_ACK] = 7 * HZ,
 	[IP_VS_TCP_S_LISTEN] = 2 * 60 * HZ,
 	[IP_VS_TCP_S_SYNACK] = 30 * HZ,
 	[IP_VS_TCP_S_LAST] = 2 * HZ,

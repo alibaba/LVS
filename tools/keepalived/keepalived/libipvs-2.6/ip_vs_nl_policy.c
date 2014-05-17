@@ -10,6 +10,7 @@ struct nla_policy ipvs_cmd_policy[IPVS_CMD_ATTR_MAX + 1] = {
 	[IPVS_CMD_ATTR_TIMEOUT_TCP_FIN]	= { .type = NLA_U32 },
 	[IPVS_CMD_ATTR_TIMEOUT_UDP]	= { .type = NLA_U32 },
 	[IPVS_CMD_ATTR_LADDR]		= { .type = NLA_NESTED},
+	[IPVS_CMD_ATTR_SNATDEST]	= { .type = NLA_NESTED},
 };
 
 struct nla_policy ipvs_service_policy[IPVS_SVC_ATTR_MAX + 1] = {
@@ -41,6 +42,22 @@ struct nla_policy ipvs_dest_policy[IPVS_DEST_ATTR_MAX + 1] = {
 	[IPVS_DEST_ATTR_INACT_CONNS]	= { .type = NLA_U32 },
 	[IPVS_DEST_ATTR_PERSIST_CONNS]	= { .type = NLA_U32 },
 	[IPVS_DEST_ATTR_STATS]		= { .type = NLA_NESTED },
+	[IPVS_DEST_ATTR_SNATRULE] = {.type = NLA_NESTED},
+};
+
+/* Policy used for attributes in nested attribute IPVS_CMD_ATTR_SNAT_DEAST */
+struct nla_policy ip_vs_snat_dest_policy[IPVS_SNAT_DEST_ATTR_MAX + 1] = {
+	[IPVS_SNAT_DEST_ATTR_FADDR] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_FMASK] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_DADDR] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_DMASK] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_GW] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_MINIP] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_MAXIP] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_ALGO] = {.type = NLA_U8},
+	[IPVS_SNAT_DEST_ATTR_NEWGW] = {.type = NLA_UNSPEC, .maxlen = sizeof(struct in6_addr)},
+	[IPVS_SNAT_DEST_ATTR_CONNFLAG] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_OUTDEV] = {.type = NLA_STRING, .maxlen = IP_VS_IFNAME_MAXLEN},
 };
 
 struct nla_policy ipvs_laddr_policy[IPVS_LADDR_ATTR_MAX + 1] = {

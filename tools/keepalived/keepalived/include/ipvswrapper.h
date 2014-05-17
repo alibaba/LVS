@@ -100,4 +100,6 @@ extern int ipvs_syncd_cmd(int, char *, int, int);
 extern void ipvs_syncd_master(char *, int);
 extern void ipvs_syncd_backup(char *, int);
 
+extern int ipvs_snat_cmd(int, virtual_server *, snat_rule *);
+
 #endif

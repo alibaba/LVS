@@ -176,6 +176,21 @@ udp_partial_csum_update(int af, struct udphdr *uhdr,
 								   check))));
 }
 
+/* Calculate UDP checksum, only for PARTICAL */
+static inline void
+udp_partial_csum_reset(int af, int len, struct udphdr *uhdr,
+				const union nf_inet_addr *saddr,
+				const union nf_inet_addr *daddr)
+{
+#ifdef CONFIG_IP_VS_IPV6
+	if (af == AF_INET6)
+		uhdr->check = ~csum_ipv6_magic(&saddr->in6, &daddr->in6,
+							len, IPPROTO_UDP, 0);
+        else
+#endif
+		uhdr->check = ~csum_tcpudp_magic(saddr->ip, daddr->ip, len, IPPROTO_UDP, 0);
+}
+
 static int
 udp_snat_handler(struct sk_buff *skb,
 		 struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
@@ -331,6 +346,150 @@ udp_dnat_handler(struct sk_buff *skb,
 		if (udph->check == 0)
 			udph->check = CSUM_MANGLED_0;
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
+	}
+	return 1;
+}
+
+static int
+udp_fnat_in_handler(struct sk_buff **skb_p,
+		    struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
+{
+	struct udphdr *udph;
+	unsigned int udphoff;
+	int oldlen;
+	struct sk_buff *skb = *skb_p;
+
+#ifdef CONFIG_IP_VS_IPV6
+	if (cp->af == AF_INET6)
+		udphoff = sizeof(struct ipv6hdr);
+	else
+#endif
+		udphoff = ip_hdrlen(skb);
+	oldlen = skb->len - udphoff;
+
+	/* csum_check requires unshared skb */
+	if (!skb_make_writable(skb, udphoff + sizeof(*udph)))
+		return 0;
+
+	if (unlikely(cp->app != NULL)) {
+		/* Some checks before mangling */
+		if (pp->csum_check && !pp->csum_check(cp->af, skb, pp))
+			return 0;
+
+		/*
+		 *      Attempt ip_vs_app call.
+		 *      It will fix ip_vs_conn and iph ack_seq stuff
+		 */
+		if (!ip_vs_app_pkt_in(cp, skb))
+			return 0;
+	}
+
+	udph = (void *)skb_network_header(skb) + udphoff;
+
+	/* adjust src/dst port */
+	udph->source = cp->lport;
+	udph->dest = cp->dport;
+
+	/* Adjust UDP checksums */
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		udp_partial_csum_reset(cp->af, (skb->len - udphoff),
+					udph, &cp->laddr, &cp->daddr);
+	} else if (!cp->app && (udph->check != 0)) {
+		/* Only port and addr are changed, do fast csum update */
+		udp_fast_csum_update(cp->af, udph, &cp->vaddr, &cp->daddr,
+				     cp->vport, cp->dport);
+		udp_fast_csum_update(cp->af, udph, &cp->caddr, &cp->laddr,
+				     cp->cport, cp->lport);
+		if (skb->ip_summed == CHECKSUM_COMPLETE)
+			skb->ip_summed = CHECKSUM_NONE;
+	} else {
+		/* full checksum calculation */
+		udph->check = 0;
+		skb->csum = skb_checksum(skb, udphoff, skb->len - udphoff, 0);
+#ifdef CONFIG_IP_VS_IPV6
+		if (cp->af == AF_INET6)
+			udph->check = csum_ipv6_magic(&cp->laddr.in6,
+						      &cp->daddr.in6,
+						      skb->len - udphoff,
+						      cp->protocol, skb->csum);
+		else
+#endif
+			udph->check = csum_tcpudp_magic(cp->laddr.ip,
+							cp->daddr.ip,
+							skb->len - udphoff,
+							cp->protocol, skb->csum);
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+	}
+	return 1;
+}
+
+static int
+udp_fnat_out_handler(struct sk_buff *skb,
+		     struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
+{
+	struct udphdr *udph;
+	unsigned int udphoff;
+	int oldlen;
+
+
+#ifdef CONFIG_IP_VS_IPV6
+	if (cp->af == AF_INET6)
+		udphoff = sizeof(struct ipv6hdr);
+	else
+#endif
+		udphoff = ip_hdrlen(skb);
+	oldlen = skb->len - udphoff;
+
+	/* csum_check requires unshared skb */
+	if (!skb_make_writable(skb, udphoff + sizeof(*udph)))
+		return 0;
+
+	if (unlikely(cp->app != NULL)) {
+		/* Some checks before mangling */
+		if (pp->csum_check && !pp->csum_check(cp->af, skb, pp))
+			return 0;
+
+		/* Call application helper if needed */
+		if (!ip_vs_app_pkt_out(cp, skb))
+			return 0;
+	}
+
+	udph = (void *)skb_network_header(skb) + udphoff;
+	udph->source = cp->vport;
+	udph->dest = cp->cport;
+
+	/* Adjust UDP checksums */
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		udp_partial_csum_reset(cp->af, (skb->len - udphoff),
+					udph, &cp->vaddr, &cp->caddr);
+	} else if (!cp->app) {
+		/* Only port and addr are changed, do fast csum update */
+		udp_fast_csum_update(cp->af, udph, &cp->daddr, &cp->vaddr,
+				     cp->dport, cp->vport);
+		udp_fast_csum_update(cp->af, udph, &cp->laddr, &cp->caddr,
+				     cp->lport, cp->cport);
+		if (skb->ip_summed == CHECKSUM_COMPLETE)
+			skb->ip_summed = CHECKSUM_NONE;
+	} else {
+		/* full checksum calculation */
+		udph->check = 0;
+		skb->csum = skb_checksum(skb, udphoff, skb->len - udphoff, 0);
+#ifdef CONFIG_IP_VS_IPV6
+		if (cp->af == AF_INET6)
+			udph->check = csum_ipv6_magic(&cp->vaddr.in6,
+						      &cp->caddr.in6,
+						      skb->len - udphoff,
+						      cp->protocol, skb->csum);
+		else
+#endif
+			udph->check = csum_tcpudp_magic(cp->vaddr.ip,
+							cp->caddr.ip,
+							skb->len - udphoff,
+							cp->protocol, skb->csum);
+
+		IP_VS_DBG(11, "O-pkt: %s O-csum=%d (+%zd)\n",
+			pp->name, udph->check,
+			(char *)&(udph->check) - (char *)udph);
 	}
 	return 1;
 }
@@ -535,6 +694,8 @@ struct ip_vs_protocol ip_vs_protocol_udp = {
 	.conn_out_get = udp_conn_out_get,
 	.snat_handler = udp_snat_handler,
 	.dnat_handler = udp_dnat_handler,
+	.fnat_in_handler = udp_fnat_in_handler,
+	.fnat_out_handler = udp_fnat_out_handler,
 	.csum_check = udp_csum_check,
 	.state_transition = udp_state_transition,
 	.state_name = udp_state_name,

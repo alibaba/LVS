@@ -35,6 +35,7 @@
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/mutex.h>
+#include <linux/inetdevice.h>
 
 #include <net/net_namespace.h>
 #include <net/ip.h>
@@ -150,6 +151,8 @@ int sysctl_ip_vs_udp_drop_entry = 1;
 int sysctl_ip_vs_conn_expire_tcp_rst = 1;
 /* L2 fast xmit, response only (to client) */
 int sysctl_ip_vs_fast_xmit = 1;
+/* L2 fast xmit, inside (to RS) */
+int sysctl_ip_vs_fast_xmit_inside = 1;
 
 #ifdef CONFIG_IP_VS_DEBUG
 static int sysctl_ip_vs_debug_level = 0;
@@ -675,6 +678,40 @@ struct ip_vs_dest *ip_vs_lookup_real_service(int af, __u16 protocol,
 	return NULL;
 }
 
+/**
+	* Lookup snat desp by {saddr, smask, daddr, dmask, gw, outdev} in the given service
+	*/
+static struct ip_vs_dest_snat *ip_vs_lookup_snat_dest(struct ip_vs_service *svc,
+		const union nf_inet_addr *saddr,
+		u32 smask,
+		const union nf_inet_addr *daddr,
+		u32 dmask,
+		const union nf_inet_addr* gw,
+		char *out_dev)
+{
+	struct ip_vs_dest *pure_dest;
+	struct ip_vs_dest_snat *snat_dest;
+
+	EnterFunction(2);
+	if (IS_SNAT_SVC(svc)) {
+		list_for_each_entry(pure_dest, &svc->destinations, n_list) {
+			snat_dest = (struct ip_vs_dest_snat *)pure_dest;
+			if ((snat_dest->dest.af == svc->af)
+			     && ip_vs_addr_equal(svc->af, &snat_dest->saddr, saddr)
+			     && ip_vs_addr_equal(svc->af, &snat_dest->daddr, daddr)
+			     && inet_mask_len(snat_dest->smask.ip) == smask
+			     && inet_mask_len(snat_dest->dmask.ip) == dmask
+			     && ip_vs_addr_equal(svc->af, &pure_dest->addr, gw)
+			     && !strcmp(snat_dest->out_dev, out_dev)) {
+				LeaveFunction(2);
+				return snat_dest;
+			}
+		}
+	}
+
+	return NULL;
+}
+
 /*
  *	Lookup destination by {addr,port} in the given service
  */
@@ -726,6 +763,62 @@ struct ip_vs_dest *ip_vs_find_dest(int af, const union nf_inet_addr *daddr,
 	ip_vs_service_put(svc);
 	return dest;
 }
+
+static struct ip_vs_dest_snat *ip_vs_trash_get_snat_dest(struct ip_vs_service *svc,
+		const union nf_inet_addr *saddr,
+		u32 smask,
+		const union nf_inet_addr *daddr,
+		u32 dmask,
+		const union nf_inet_addr *gw,
+		char* out_dev)
+{
+	struct ip_vs_dest *dest, *nxt;
+	struct ip_vs_dest_snat *snat_dest = NULL;
+
+
+	EnterFunction(2);
+	/* Find the snat destination in trash */
+	list_for_each_entry_safe(dest, nxt, &ip_vs_dest_trash, n_list) {
+		IP_VS_DBG_BUF(3, "Destination %u/%s:%u still in trash, "
+			"dest->refcnt=%d\n",
+			dest->vfwmark,
+			IP_VS_DBG_ADDR(svc->af, &dest->addr),
+			ntohs(dest->port), atomic_read(&dest->refcnt));
+
+		if (dest->svc && IS_SNAT_SVC(dest->svc)) {
+			snat_dest = (struct ip_vs_dest_snat *)dest;
+			if (dest->vfwmark == svc->fwmark /* the same service */
+			    && (snat_dest->dest.af == svc->af)
+			    && ip_vs_addr_equal(svc->af, &snat_dest->saddr, saddr)
+			    && ip_vs_addr_equal(svc->af, &snat_dest->daddr, daddr)
+			    && inet_mask_len(snat_dest->smask.ip) == smask
+			    && inet_mask_len(snat_dest->dmask.ip) == dmask
+			    && ip_vs_addr_equal(svc->af, &dest->addr, gw)
+			    &&  !strcmp(snat_dest->out_dev, out_dev)) {
+				return snat_dest;
+			}
+		}
+/*
+	      * Try to purge the destination from trash if not referenced
+	      */
+		if (atomic_read(&dest->refcnt) == 1) {
+			IP_VS_DBG_BUF(3, "Removing destination %u/%s:%u from trash\n",
+					dest->vfwmark,
+					IP_VS_DBG_ADDR(svc->af, &dest->addr),
+					ntohs(dest->port));
+			list_del(&dest->n_list);
+			ip_vs_dst_reset(dest);
+			__ip_vs_unbind_svc(dest);
+
+			/* Delete dest dedicated statistic varible which is percpu type */
+			ip_vs_del_stats(dest->stats);
+			kfree(dest);
+		}
+	}
+
+	return NULL;
+}
+
 
 /*
  *  Lookup dest by {svc,addr,port} in the destination trash.
@@ -810,6 +903,42 @@ static void ip_vs_trash_cleanup(void)
 }
 
 /*
+	* Update snat rule part of a snat dest
+	*/
+static void __ip_vs_update_snat_dest(struct ip_vs_service *svc,
+		struct ip_vs_dest_snat *snat_dest,
+		struct ip_vs_snat_dest_user_kern *udest)
+{
+	union nf_inet_addr tmp;
+
+	EnterFunction(2);
+	ip_vs_addr_copy(svc->af, &snat_dest->saddr, &udest->saddr);
+	tmp.ip = inet_make_mask(udest->smask);
+	ip_vs_addr_copy(svc->af, &snat_dest->smask, &tmp);
+
+	ip_vs_addr_copy(svc->af, &snat_dest->daddr, &udest->daddr);
+	tmp.ip = inet_make_mask(udest->dmask);
+	ip_vs_addr_copy(svc->af, &snat_dest->dmask, &tmp);
+
+	//ip_vs_addr_copy(svc->af, &snat_dest->gateway, &udest->gw);
+
+	ip_vs_addr_copy(svc->af, &snat_dest->minip, &udest->minip);
+
+	ip_vs_addr_copy(svc->af, &snat_dest->maxip, &udest->maxip);
+
+	ip_vs_addr_copy(svc->af, &snat_dest->new_gateway, &udest->new_gw);
+
+	snat_dest->ip_sel_algo = (u8)udest->algo;
+
+	strcpy(snat_dest->out_dev, udest->out_dev);
+
+	memset(snat_dest->out_dev_mask, 0, sizeof(snat_dest->out_dev_mask));
+	memset(snat_dest->out_dev_mask, 0xFF, strlen(snat_dest->out_dev)); /* fix me */
+	LeaveFunction(2);
+}
+
+
+/*
  *	Update a destination in the given service
  */
 static void
@@ -868,6 +997,7 @@ __ip_vs_update_dest(struct ip_vs_service *svc,
 		dest->flags &= ~IP_VS_DEST_F_OVERLOAD;
 	dest->u_threshold = udest->u_threshold;
 	dest->l_threshold = udest->l_threshold;
+
 }
 
 /*
@@ -888,19 +1018,30 @@ ip_vs_new_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest,
 		atype = ipv6_addr_type(&udest->addr.in6);
 		if ((!(atype & IPV6_ADDR_UNICAST) ||
 		     atype & IPV6_ADDR_LINKLOCAL) &&
-		    !__ip_vs_addr_is_local_v6(&udest->addr.in6))
+		    !__ip_vs_addr_is_local_v6(&udest->addr.in6)) {
+			IP_VS_ERR_RL("AF_INET6 address type error.\n");
 			return -EINVAL;
+		}
 	} else
 #endif
 	{
+	if (udest->addr.ip != 0) {
 		atype = inet_addr_type(&init_net, udest->addr.ip);
-		if (atype != RTN_LOCAL && atype != RTN_UNICAST)
+		if (atype != RTN_LOCAL && atype != RTN_UNICAST) {
+			IP_VS_ERR_RL("AF_INET address type error.\n");
 			return -EINVAL;
 	}
+		}
+	}
 
+	if (NOT_SNAT_SVC(svc)) {
 	dest = kzalloc(sizeof(struct ip_vs_dest), GFP_ATOMIC);
+	} else {
+		dest = kzalloc(sizeof(struct ip_vs_dest_snat), GFP_ATOMIC);
+	}
+
 	if (dest == NULL) {
-		pr_err("%s(): no memory.\n", __func__);
+		IP_VS_ERR_RL(" no memory.\n");
 		return -ENOMEM;
 	}
 
@@ -917,16 +1058,21 @@ ip_vs_new_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest,
 	atomic_set(&dest->persistconns, 0);
 	atomic_set(&dest->refcnt, 0);
 
+	if (IS_SNAT_SVC(svc)) {
+		struct ip_vs_dest_snat *snat_dest = (struct ip_vs_dest_snat *)dest;
+		INIT_LIST_HEAD(&snat_dest->rule_list);
+	}
 	INIT_LIST_HEAD(&dest->d_list);
 	spin_lock_init(&dest->dst_lock);
 
 	/* Init statistic */
 	ret = ip_vs_new_stats(&(dest->stats));
-	if(ret)
+	if (ret) {
+		IP_VS_ERR_RL("ip_vs_new_stats fail [%d]\n", ret);
 		goto out_err;
+	}
 
 	__ip_vs_update_dest(svc, dest, udest);
-
 
 	*dest_p = dest;
 
@@ -936,6 +1082,149 @@ ip_vs_new_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest,
 out_err:
 	kfree(dest);
 	return ret;
+}
+
+/*
+ *	Create a snat destination for the given service
+ */
+static int
+ip_vs_new_snat_dest(struct ip_vs_service *svc,
+		     struct ip_vs_snat_dest_user_kern *udest,
+		     struct ip_vs_dest_snat **dest_p)
+{
+	int ret = 0;
+	struct ip_vs_dest_user_kern pure_dest;
+	EnterFunction(2);
+	memset(&pure_dest, 0, sizeof(pure_dest));
+	pure_dest.conn_flags = udest->conn_flags;
+	/* udest->saddr or udest->daddr may be net address, not host ip address */
+	ip_vs_addr_copy(svc->af, &pure_dest.addr, &udest->gw);
+	ret = ip_vs_new_dest(svc, &pure_dest, (struct ip_vs_dest **)dest_p);
+	if (ret) {
+		IP_VS_ERR_RL("[snat] ip_vs_new_dest failed, [%d]\n", ret);
+		return ret;
+	}
+	__ip_vs_update_snat_dest(svc, *dest_p, udest);
+	LeaveFunction(2);
+	return 0;
+}
+
+
+/**
+	* add a snat dest into an existing service
+	*/
+static int
+ip_vs_add_snat_dest(struct ip_vs_service *svc,
+	                struct ip_vs_snat_dest_user_kern *usnat_dest_data)
+{
+	int ret;
+	struct ip_vs_dest_snat *snat_dest;
+	struct ip_vs_dest *pure_dest;
+	union nf_inet_addr saddr;
+	union nf_inet_addr daddr;
+	union nf_inet_addr gw;
+	u32 smask, dmask;
+	char out_dev[IP_VS_IFNAME_MAXLEN] = {0};
+
+	struct ip_vs_dest_user_kern tmp_dest;
+
+	EnterFunction(2);
+	if (NOT_SNAT_SVC(svc)) {
+		IP_VS_ERR_RL("[snat] isn't snat service\n");
+		return -EINVAL;
+	}
+
+	ip_vs_addr_copy(svc->af, &saddr, &usnat_dest_data->saddr);
+	smask = usnat_dest_data->smask;
+	ip_vs_addr_copy(svc->af, &daddr, &usnat_dest_data->daddr);
+	dmask = usnat_dest_data->dmask;
+	ip_vs_addr_copy(svc->af, &gw, &usnat_dest_data->gw);
+	strcpy(out_dev, usnat_dest_data->out_dev);
+	/* Check if the dest already exists in the list */
+	snat_dest = ip_vs_lookup_snat_dest(svc, &saddr, smask, &daddr, dmask, &gw, out_dev);
+	if (snat_dest != NULL) {
+		IP_VS_ERR_RL("[snat] snat dest already exists\n");
+		return -EEXIST;
+	}
+
+	 /*
+	 * Check if the dest already exists in the trash and
+	 * is from the same service
+	 */
+	snat_dest = ip_vs_trash_get_snat_dest(svc, &saddr, smask, &daddr, dmask, &gw, out_dev);
+	if (snat_dest != NULL) {
+		pure_dest = (struct ip_vs_dest *)snat_dest;
+		IP_VS_DBG_BUF(3, "Get snat destination -F %s/%u -T %s/%u -W %s --oif %s from trash, "
+			"dest->refcnt=%d, service -f [%u]\n",
+			IP_VS_DBG_ADDR(svc->af, &saddr), smask,
+			IP_VS_DBG_ADDR(svc->af, &daddr), dmask,
+			IP_VS_DBG_ADDR(svc->af, &gw),
+			out_dev,
+			atomic_read(&pure_dest->refcnt),
+			pure_dest->vfwmark);
+
+		memset(&tmp_dest, 0, sizeof(tmp_dest));
+		/* set connection flag to ip_vs_dest.conn_flags */
+		tmp_dest.conn_flags = usnat_dest_data->conn_flags;
+		/* set gateway address to ip_vs_dest.addr */
+		ip_vs_addr_copy(svc->af, &tmp_dest.addr, &usnat_dest_data->gw);
+		/* update pure dest parts */
+		__ip_vs_update_dest(svc, pure_dest, &tmp_dest);
+		/* update snat rule dest parts */
+		__ip_vs_update_snat_dest(svc, snat_dest, usnat_dest_data);
+
+		/* Get the destination from the trash */
+		list_del(&pure_dest->n_list);
+
+		/* Reset the statistic value */
+		ip_vs_zero_stats(pure_dest->stats);
+		write_lock_bh(&__ip_vs_svc_lock);
+		/* Wait until all other svc users go away.*/
+		IP_VS_WAIT_WHILE(atomic_read(&svc->usecnt) > 1);
+		list_add(&pure_dest->n_list, &svc->destinations);
+		svc->num_dests++;
+
+		/* call the update_service function of its scheduler */
+		if (svc->scheduler->update_service)
+			svc->scheduler->update_service(svc);
+
+		write_unlock_bh(&__ip_vs_svc_lock);
+		LeaveFunction(2);
+		return 0;
+	}
+
+	 /*
+	 * Allocate and initialize the dest structure
+	 */
+	ret = ip_vs_new_snat_dest(svc, usnat_dest_data, &snat_dest);
+	if (ret) {
+		return ret;
+	}
+	pure_dest = (struct ip_vs_dest *)snat_dest;
+	 /*
+	 * Add the dest entry into the list
+	 */
+	atomic_inc(&pure_dest->refcnt);
+
+	write_lock_bh(&__ip_vs_svc_lock);
+
+	/*
+	* Wait until all other svc users go away.
+	*/
+	IP_VS_WAIT_WHILE(atomic_read(&svc->usecnt) > 1);
+
+	list_add(&pure_dest->n_list, &svc->destinations);
+	svc->num_dests++;
+
+	/* call the update_service function of its scheduler */
+	if (svc->scheduler->update_service)
+		svc->scheduler->update_service(svc);
+
+	write_unlock_bh(&__ip_vs_svc_lock);
+
+	LeaveFunction(2);
+
+	return 0;
 }
 
 /*
@@ -1041,6 +1330,59 @@ ip_vs_add_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest)
 	svc->num_dests++;
 
 	/* call the update_service function of its scheduler */
+	if (svc->scheduler->update_service)
+		svc->scheduler->update_service(svc);
+
+	write_unlock_bh(&__ip_vs_svc_lock);
+
+	LeaveFunction(2);
+
+	return 0;
+}
+
+
+/*
+ *	Edit a snat destination in the given service
+ */
+static int
+ip_vs_edit_snat_dest(struct ip_vs_service *svc,
+		      struct ip_vs_snat_dest_user_kern *usnat_dest_data)
+{
+	struct ip_vs_dest_snat *snat_dest;
+	struct ip_vs_dest *pure_dest;
+	union nf_inet_addr daddr;
+	union nf_inet_addr saddr;
+	union nf_inet_addr gw;
+	char out_dev[IP_VS_IFNAME_MAXLEN] = {0};
+	struct ip_vs_dest_user_kern tmp_pure_dest;
+
+	u32 dmask = usnat_dest_data->dmask;
+	u32 smask = usnat_dest_data->smask;
+
+	EnterFunction(2);
+	ip_vs_addr_copy(svc->af, &saddr, &usnat_dest_data->saddr);
+	ip_vs_addr_copy(svc->af, &daddr, &usnat_dest_data->daddr);
+	ip_vs_addr_copy(svc->af, &gw, &usnat_dest_data->gw);
+	strcpy(out_dev, usnat_dest_data->out_dev);
+
+	/* Lookup the destination list */
+	snat_dest = ip_vs_lookup_snat_dest(svc, &saddr, smask, &daddr, dmask, &gw, out_dev);
+	if (snat_dest == NULL) {
+		IP_VS_ERR_RL("[snat] dest doesn't exist\n");
+		return -ENOENT;
+	}
+	pure_dest = (struct ip_vs_dest *)snat_dest;
+	memset(&tmp_pure_dest, 0, sizeof(tmp_pure_dest));
+	tmp_pure_dest.conn_flags = usnat_dest_data->conn_flags;
+	__ip_vs_update_dest(svc, pure_dest, &tmp_pure_dest);
+	__ip_vs_update_snat_dest(svc, snat_dest, usnat_dest_data);
+
+	write_lock_bh(&__ip_vs_svc_lock);
+
+	/* Wait until all other svc users go away */
+	IP_VS_WAIT_WHILE(atomic_read(&svc->usecnt) > 1);
+
+	/* call the update_service, because server weight may be changed */
 	if (svc->scheduler->update_service)
 		svc->scheduler->update_service(svc);
 
@@ -1166,6 +1508,63 @@ static void __ip_vs_unlink_dest(struct ip_vs_service *svc,
 }
 
 /*
+ *	Delete a snat destination server in the given service
+ */
+static int
+ip_vs_del_snat_dest(struct ip_vs_service *svc,
+					struct ip_vs_snat_dest_user_kern *usnat_dest_data)
+{
+	struct ip_vs_dest_snat *snat_dest;
+	struct ip_vs_dest *pure_dest;
+	union nf_inet_addr daddr;
+	union nf_inet_addr saddr;
+	union nf_inet_addr gw;
+	char out_dev[IP_VS_IFNAME_MAXLEN] = {0};
+
+	u32 dmask = usnat_dest_data->dmask;
+	u32 smask = usnat_dest_data->smask;
+
+	EnterFunction(2);
+	ip_vs_addr_copy(svc->af, &saddr, &usnat_dest_data->saddr);
+	ip_vs_addr_copy(svc->af, &daddr, &usnat_dest_data->daddr);
+	ip_vs_addr_copy(svc->af, &gw, &usnat_dest_data->gw);
+	strcpy(out_dev, usnat_dest_data->out_dev);
+
+	/*
+	 *  Lookup the destination list
+	 */
+	snat_dest = ip_vs_lookup_snat_dest(svc, &saddr, smask, &daddr, dmask, &gw, out_dev);
+	if (snat_dest == NULL) {
+		IP_VS_ERR_RL("[snat] snat dest not exist\n");
+		return -ENOENT;
+	}
+	pure_dest = (struct ip_vs_dest *)snat_dest;
+
+	write_lock_bh(&__ip_vs_svc_lock);
+
+	/*
+	 *      Wait until all other svc users go away.
+	 */
+	IP_VS_WAIT_WHILE(atomic_read(&svc->usecnt) > 1);
+
+	/*
+	 *      Unlink dest from the service
+	 */
+	__ip_vs_unlink_dest(svc, pure_dest, 1);
+
+	write_unlock_bh(&__ip_vs_svc_lock);
+
+	/*
+	 *      Delete the destination
+	 */
+	__ip_vs_del_dest(pure_dest);
+
+	LeaveFunction(2);
+
+	return 0;
+}
+
+/*
  *	Delete a destination server in the given service
  */
 static int
@@ -1179,7 +1578,7 @@ ip_vs_del_dest(struct ip_vs_service *svc, struct ip_vs_dest_user_kern *udest)
 	dest = ip_vs_lookup_dest(svc, &udest->addr, dport);
 
 	if (dest == NULL) {
-		IP_VS_DBG(1, "%s(): destination not found!\n", __func__);
+		IP_VS_ERR_RL(" dest not exist\n");
 		return -ENOENT;
 	}
 
@@ -2199,6 +2598,16 @@ static struct ctl_table vs_vars[] = {
 	 .extra1 = &ip_vs_entry_min,	/* zero */
 	 .extra2 = &ip_vs_entry_max,	/* one */
 	 },
+	{
+	 .procname = "fast_response_xmit_inside",
+	 .data = &sysctl_ip_vs_fast_xmit_inside,
+	 .maxlen = sizeof(int),
+	 .mode = 0644,
+	 .proc_handler = &proc_dointvec_minmax,
+	 .strategy = &sysctl_intvec,
+	 .extra1 = &ip_vs_entry_min,  /* zero */
+	 .extra2 = &ip_vs_entry_max,  /* one */
+	 },
 	{.ctl_name = 0}
 };
 
@@ -2519,14 +2928,19 @@ static struct ip_vs_estats_entry ext_stats[] = {
 	IP_VS_ESTATS_ITEM("synproxy_conn_reused_lastack",
 			  SYNPROXY_CONN_REUSED_LASTACK),
 	IP_VS_ESTATS_ITEM("defence_ip_frag_drop", DEFENCE_IP_FRAG_DROP),
+	IP_VS_ESTATS_ITEM("defence_ip_frag_gather", DEFENCE_IP_FRAG_GATHER),
 	IP_VS_ESTATS_ITEM("defence_tcp_drop", DEFENCE_TCP_DROP),
 	IP_VS_ESTATS_ITEM("defence_udp_drop", DEFENCE_UDP_DROP),
 	IP_VS_ESTATS_ITEM("fast_xmit_reject", FAST_XMIT_REJECT),
 	IP_VS_ESTATS_ITEM("fast_xmit_pass", FAST_XMIT_PASS),
+	IP_VS_ESTATS_ITEM("fast_xmit_failed", FAST_XMIT_FAILED),
 	IP_VS_ESTATS_ITEM("fast_xmit_skb_copy", FAST_XMIT_SKB_COPY),
 	IP_VS_ESTATS_ITEM("fast_xmit_no_mac", FAST_XMIT_NO_MAC),
 	IP_VS_ESTATS_ITEM("fast_xmit_synproxy_save", FAST_XMIT_SYNPROXY_SAVE),
 	IP_VS_ESTATS_ITEM("fast_xmit_dev_lost", FAST_XMIT_DEV_LOST),
+	IP_VS_ESTATS_ITEM("fast_xmit_reject_inside", FAST_XMIT_REJECT_INSIDE),
+	IP_VS_ESTATS_ITEM("fast_xmit_pass_inside", FAST_XMIT_PASS_INSIDE),
+	IP_VS_ESTATS_ITEM("fast_xmit_failed_inside", FAST_XMIT_FAILED_INSIDE),
 	IP_VS_ESTATS_ITEM("rst_in_syn_sent", RST_IN_SYN_SENT),
 	IP_VS_ESTATS_ITEM("rst_out_syn_sent", RST_OUT_SYN_SENT),
 	IP_VS_ESTATS_ITEM("rst_in_established", RST_IN_ESTABLISHED),
@@ -3219,6 +3633,7 @@ static const struct nla_policy ip_vs_cmd_policy[IPVS_CMD_ATTR_MAX + 1] = {
 	[IPVS_CMD_ATTR_TIMEOUT_TCP_FIN] = {.type = NLA_U32},
 	[IPVS_CMD_ATTR_TIMEOUT_UDP] = {.type = NLA_U32},
 	[IPVS_CMD_ATTR_LADDR] = {.type = NLA_NESTED},
+	[IPVS_CMD_ATTR_SNATDEST] = {.type = NLA_NESTED},
 };
 
 /* Policy used for attributes in nested attribute IPVS_CMD_ATTR_DAEMON */
@@ -3259,7 +3674,31 @@ static const struct nla_policy ip_vs_dest_policy[IPVS_DEST_ATTR_MAX + 1] = {
 	[IPVS_DEST_ATTR_INACT_CONNS] = {.type = NLA_U32},
 	[IPVS_DEST_ATTR_PERSIST_CONNS] = {.type = NLA_U32},
 	[IPVS_DEST_ATTR_STATS] = {.type = NLA_NESTED},
+	[IPVS_DEST_ATTR_SNATRULE] = {.type = NLA_NESTED},
 };
+
+/* Policy used for attributes in nested attribute IPVS_CMD_ATTR_SNAT_DEAST */
+static const struct nla_policy ip_vs_snat_dest_policy[IPVS_SNAT_DEST_ATTR_MAX + 1] = {
+	[IPVS_SNAT_DEST_ATTR_FADDR] = {.type = NLA_BINARY,
+					.len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_FMASK] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_DADDR] = {.type = NLA_BINARY,
+				       .len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_DMASK] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_GW] = {.type = NLA_BINARY,
+				    .len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_MINIP] = {.type = NLA_BINARY,
+				       .len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_MAXIP] = {.type = NLA_BINARY,
+				       .len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_ALGO] = {.type = NLA_U8},
+	[IPVS_SNAT_DEST_ATTR_NEWGW] = {.type = NLA_BINARY,
+				       .len = sizeof(union nf_inet_addr)},
+	[IPVS_SNAT_DEST_ATTR_CONNFLAG] = {.type = NLA_U32},
+	[IPVS_SNAT_DEST_ATTR_OUTDEV] = {.type = NLA_STRING,
+					.len = IP_VS_IFNAME_MAXLEN},
+};
+
 
 static const struct nla_policy ip_vs_laddr_policy[IPVS_LADDR_ATTR_MAX + 1] = {
 	[IPVS_LADDR_ATTR_ADDR] = {.type = NLA_BINARY,
@@ -3267,6 +3706,38 @@ static const struct nla_policy ip_vs_laddr_policy[IPVS_LADDR_ATTR_MAX + 1] = {
 	[IPVS_LADDR_ATTR_PORT_CONFLICT] = {.type = NLA_U64},
 	[IPVS_LADDR_ATTR_CONN_COUNTS] = {.type = NLA_U32},
 };
+
+static int ip_vs_genl_fill_snat_rule(struct sk_buff *skb, int container_type,
+				      struct ip_vs_dest_snat *snat_dest)
+{
+	struct ip_vs_dest *udest = (struct ip_vs_dest *)snat_dest;
+	struct nlattr *nl_stats = nla_nest_start(skb, container_type);
+	EnterFunction(2);
+	if (!nl_stats) {
+		IP_VS_ERR_RL("nl_stats == NULL.\n");
+		return -EMSGSIZE;
+	}
+
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_FADDR, sizeof(snat_dest->saddr), &snat_dest->saddr);
+	NLA_PUT_U32(skb, IPVS_SNAT_DEST_ATTR_FMASK, inet_mask_len(snat_dest->smask.ip));
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_DADDR, sizeof(snat_dest->saddr), &snat_dest->daddr);
+	NLA_PUT_U32(skb, IPVS_SNAT_DEST_ATTR_DMASK, inet_mask_len(snat_dest->dmask.ip));
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_GW, sizeof(udest->addr), &udest->addr);
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_MINIP, sizeof(snat_dest->minip), &snat_dest->minip);
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_MAXIP, sizeof(snat_dest->maxip), &snat_dest->maxip);
+	NLA_PUT_U8(skb, IPVS_SNAT_DEST_ATTR_ALGO, snat_dest->ip_sel_algo);
+	NLA_PUT(skb, IPVS_SNAT_DEST_ATTR_NEWGW, sizeof(snat_dest->new_gateway), &snat_dest->new_gateway);
+	NLA_PUT_U32(skb, IPVS_SNAT_DEST_ATTR_CONNFLAG, atomic_read(&snat_dest->dest.conn_flags));
+	NLA_PUT_STRING(skb, IPVS_SNAT_DEST_ATTR_OUTDEV, snat_dest->out_dev);
+
+	nla_nest_end(skb, nl_stats);
+	LeaveFunction(2);
+	return 0;
+
+nla_put_failure:
+	nla_nest_cancel(skb, nl_stats);
+	return -EMSGSIZE;
+}
 
 static int ip_vs_genl_fill_stats(struct sk_buff *skb, int container_type,
 				 struct ip_vs_stats *stats)
@@ -3501,13 +3972,15 @@ static struct ip_vs_service *ip_vs_genl_find_service(struct nlattr *nla)
 					   &usvc.addr, usvc.port);
 }
 
-static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
+static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest, int is_snat)
 {
 	struct nlattr *nl_dest;
 
+	EnterFunction(2);
 	nl_dest = nla_nest_start(skb, IPVS_CMD_ATTR_DEST);
-	if (!nl_dest)
+	if (!nl_dest) {
 		return -EMSGSIZE;
+	}
 
 	NLA_PUT(skb, IPVS_DEST_ATTR_ADDR, sizeof(dest->addr), &dest->addr);
 	NLA_PUT_U16(skb, IPVS_DEST_ATTR_PORT, dest->port);
@@ -3524,11 +3997,20 @@ static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
 	NLA_PUT_U32(skb, IPVS_DEST_ATTR_PERSIST_CONNS,
 		    atomic_read(&dest->persistconns));
 
-	if (ip_vs_genl_fill_stats(skb, IPVS_DEST_ATTR_STATS, dest->stats))
+	if (ip_vs_genl_fill_stats(skb, IPVS_DEST_ATTR_STATS, dest->stats)) {
 		goto nla_put_failure;
+	}
+
+		if (is_snat) {
+			struct ip_vs_dest_snat* snat_dest = (struct ip_vs_dest_snat *)dest;
+				if (ip_vs_genl_fill_snat_rule(skb, IPVS_DEST_ATTR_SNATRULE, snat_dest)) {
+				    IP_VS_ERR_RL(" ip_vs_genl_fill_snat_rule error.\n");
+				    goto nla_put_failure;
+				}
+		}
 
 	nla_nest_end(skb, nl_dest);
-
+	LeaveFunction(2);
 	return 0;
 
       nla_put_failure:
@@ -3537,18 +4019,22 @@ static int ip_vs_genl_fill_dest(struct sk_buff *skb, struct ip_vs_dest *dest)
 }
 
 static int ip_vs_genl_dump_dest(struct sk_buff *skb, struct ip_vs_dest *dest,
-				struct netlink_callback *cb)
+				struct netlink_callback *cb, int is_snat)
 {
 	void *hdr;
-
+	EnterFunction(2);
 	hdr = genlmsg_put(skb, NETLINK_CB(cb->skb).pid, cb->nlh->nlmsg_seq,
 			  &ip_vs_genl_family, NLM_F_MULTI, IPVS_CMD_NEW_DEST);
-	if (!hdr)
+	if (!hdr) {
+		IP_VS_ERR_RL("%s(): genlmsg_put error.\n", __func__);
 		return -EMSGSIZE;
+	}
 
-	if (ip_vs_genl_fill_dest(skb, dest) < 0)
+	if (ip_vs_genl_fill_dest(skb, dest, is_snat) < 0) {
+		IP_VS_ERR_RL("%s(): ip_vs_genl_fill_dest error.\n", __func__);
 		goto nla_put_failure;
-
+	}
+	LeaveFunction(2);
 	return genlmsg_end(skb, hdr);
 
       nla_put_failure:
@@ -3560,6 +4046,7 @@ static int ip_vs_genl_dump_dests(struct sk_buff *skb,
 				 struct netlink_callback *cb)
 {
 	int idx = 0;
+	int is_snat = 0;
 	int start = cb->args[0];
 	struct ip_vs_service *svc;
 	struct ip_vs_dest *dest;
@@ -3569,18 +4056,24 @@ static int ip_vs_genl_dump_dests(struct sk_buff *skb,
 
 	/* Try to find the service for which to dump destinations */
 	if (nlmsg_parse(cb->nlh, GENL_HDRLEN, attrs,
-			IPVS_CMD_ATTR_MAX, ip_vs_cmd_policy))
+			IPVS_CMD_ATTR_MAX, ip_vs_cmd_policy)) {
 		goto out_err;
+	}
 
 	svc = ip_vs_genl_find_service(attrs[IPVS_CMD_ATTR_SERVICE]);
-	if (IS_ERR(svc) || svc == NULL)
+	if (IS_ERR(svc) || svc == NULL) {
 		goto out_err;
+	}
+
+	if (IS_SNAT_SVC(svc)) {
+		is_snat = 1;
+	}
 
 	/* Dump the destinations */
 	list_for_each_entry(dest, &svc->destinations, n_list) {
 		if (++idx <= start)
 			continue;
-		if (ip_vs_genl_dump_dest(skb, dest, cb) < 0) {
+		if (ip_vs_genl_dump_dest(skb, dest, cb, is_snat) < 0) {
 			idx--;
 			goto nla_put_failure;
 		}
@@ -3701,6 +4194,83 @@ static int ip_vs_genl_parse_laddr(struct ip_vs_laddr_user_kern *uladdr,
 	memset(uladdr, 0, sizeof(*uladdr));
 	nla_memcpy(&uladdr->addr, nla_addr, sizeof(uladdr->addr));
 
+	return 0;
+}
+
+/* get snat dest info from ipvsadm tools */
+static int ip_vs_genl_parse_snat_dest(struct ip_vs_snat_dest_user_kern *usnat_dest,
+				       struct nlattr* nla, int full_entry)
+{
+	struct nlattr *attrs[IPVS_SNAT_DEST_ATTR_MAX+ 1];
+	struct nlattr *nal_saddr, *nal_daddr, *nal_smask, *nal_dmask;
+	struct nlattr *nal_gw, *nal_minip, *nal_maxip, *nal_algo,
+			*nal_newgw, *nal_conn_flags, *nal_out_dev;
+	int ret;
+
+	EnterFunction(2);
+	if (NULL == nla) {
+		IP_VS_ERR_RL("[snat] nla == NULL\n");
+		return -EINVAL;
+	}
+
+	ret = nla_parse_nested(attrs, IPVS_SNAT_DEST_ATTR_MAX, nla, ip_vs_snat_dest_policy);
+	if (ret) {
+		IP_VS_ERR_RL("[snat] nla_parse_nested failed,[%d]\n", ret);
+		return -EINVAL;
+	}
+
+	nal_saddr = attrs[IPVS_SNAT_DEST_ATTR_FADDR];
+	nal_smask = attrs[IPVS_SNAT_DEST_ATTR_FMASK];
+	nal_daddr = attrs[IPVS_SNAT_DEST_ATTR_DADDR];
+	nal_dmask = attrs[IPVS_SNAT_DEST_ATTR_DMASK];
+	nal_gw = attrs[IPVS_SNAT_DEST_ATTR_GW];
+	nal_out_dev = attrs[IPVS_SNAT_DEST_ATTR_OUTDEV];
+
+	if (!(nal_saddr && nal_smask && nal_dmask && nal_daddr && nal_gw && nal_out_dev)) {
+		IP_VS_ERR_RL("[snat] basic return EINVAL\n");
+		return -EINVAL;
+	}
+
+	memset(usnat_dest, 0, sizeof(*usnat_dest));
+	nla_memcpy(&usnat_dest->saddr, nal_saddr, sizeof(usnat_dest->saddr));
+	usnat_dest->smask = nla_get_u32(nal_smask);
+	nla_memcpy(&usnat_dest->daddr, nal_daddr, sizeof(usnat_dest->daddr));
+	usnat_dest->dmask = nla_get_u32(nal_dmask);
+	nla_memcpy(&usnat_dest->gw, nal_gw, sizeof(usnat_dest->gw));
+	strcpy(usnat_dest->out_dev, nla_data(nal_out_dev));
+
+	IP_VS_DBG(6, "%s(): usnat_dest->saddr = %pI4\n", __func__, &usnat_dest->saddr.ip);
+	IP_VS_DBG(6, "%s(): usnat_dest->smask = %d\n", __func__, usnat_dest->smask);
+	IP_VS_DBG(6, "%s(): usnat_dest->daddr = %pI4\n", __func__, &usnat_dest->daddr.ip);
+	IP_VS_DBG(6, "%s(): usnat_dest->dmask = %d\n", __func__, usnat_dest->dmask);
+	IP_VS_DBG(6, "%s(): usnat_dest->gw = %pI4\n", __func__, &usnat_dest->gw.ip);
+	IP_VS_DBG(6, "%s(): usnat_dest->out_dev = [%s]\n", __func__, usnat_dest->out_dev);
+
+	if (full_entry) {
+		nal_minip = attrs[IPVS_SNAT_DEST_ATTR_MINIP];
+		nal_maxip = attrs[IPVS_SNAT_DEST_ATTR_MAXIP];
+		nal_algo = attrs[IPVS_SNAT_DEST_ATTR_ALGO];
+		nal_newgw = attrs[IPVS_SNAT_DEST_ATTR_NEWGW];
+		nal_conn_flags = attrs[IPVS_SNAT_DEST_ATTR_CONNFLAG];
+
+		if (!(nal_minip && nal_maxip && nal_algo && nal_newgw && nal_conn_flags)) {
+			IP_VS_ERR_RL("[snat] full_entry return EINVAL\n");
+			return -EINVAL;
+		}
+
+		nla_memcpy(&usnat_dest->minip, nal_minip, sizeof(usnat_dest->minip));
+		nla_memcpy(&usnat_dest->maxip, nal_maxip, sizeof(usnat_dest->maxip));
+		nla_memcpy(&usnat_dest->new_gw, nal_newgw, sizeof(usnat_dest->new_gw));
+		usnat_dest->conn_flags = nla_get_u16(nal_conn_flags) & IP_VS_CONN_F_FWD_MASK;
+		usnat_dest->algo = nla_get_u8(nal_algo);
+
+		IP_VS_DBG(6, "%s(): usnat_dest->minip = %pI4\n", __func__, &usnat_dest->minip.ip);
+		IP_VS_DBG(6, "%s(): usnat_dest->maxip = %pI4\n", __func__,&usnat_dest->maxip.ip);
+		IP_VS_DBG(6, "%s(): usnat_dest->new_gw = %pI4\n", __func__, &usnat_dest->new_gw.ip);
+		IP_VS_DBG(6, "%s(): usnat_dest->conn_flags = %d\n", __func__, usnat_dest->conn_flags);
+		IP_VS_DBG(6, "%s(): usnat_dest->algo = %d\n", __func__, usnat_dest->algo);
+	}
+	LeaveFunction(2);
 	return 0;
 }
 
@@ -3863,10 +4433,11 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 	struct ip_vs_service *svc = NULL;
 	struct ip_vs_service_user_kern usvc;
 	struct ip_vs_dest_user_kern udest;
+	struct ip_vs_snat_dest_user_kern usnat_dest;
 	struct ip_vs_laddr_user_kern uladdr;
 
 	int ret = 0, cmd;
-	int need_full_svc = 0, need_full_dest = 0;
+	int need_full_svc = 0, need_full_dest = 0, need_full_snat_dest = 0;
 
 	cmd = info->genlhdr->cmd;
 
@@ -3919,7 +4490,7 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 	else
 		svc = __ip_vs_svc_fwm_get(usvc.af, usvc.fwmark);
 
-	/* Unless we're adding a new service, the service must already exist */
+	/* Unless we're adding a new service, or the service must already exist */
 	if ((cmd != IPVS_CMD_NEW_SERVICE) && (svc == NULL)) {
 		ret = -ESRCH;
 		goto out;
@@ -3927,7 +4498,8 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 
 	/* Destination commands require a valid destination argument. For
 	 * adding / editing a destination, we need a full destination
-	 * specification. */
+	 * specification.
+	 */
 	if (cmd == IPVS_CMD_NEW_DEST || cmd == IPVS_CMD_SET_DEST ||
 	    cmd == IPVS_CMD_DEL_DEST) {
 		if (cmd != IPVS_CMD_DEL_DEST)
@@ -3946,6 +4518,24 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 					     1);
 		if (ret)
 			goto out;
+	}
+
+	 /* Snat destination commands require a valid destination argument. For
+	 * adding / editing a snat destination, we need a full destination
+	 * specification.
+	 */
+	if (cmd == IPVS_CMD_NEW_SNATDEST || cmd == IPVS_CMD_SET_SNATDEST
+	    || cmd == IPVS_CMD_DEL_SNATDEST) {
+		if (cmd != IPVS_CMD_DEL_SNATDEST) {
+			need_full_snat_dest = 1;
+		}
+		ret = ip_vs_genl_parse_snat_dest(&usnat_dest,
+				info->attrs[IPVS_CMD_ATTR_SNATDEST],
+				need_full_snat_dest);
+		if (ret) {
+			IP_VS_ERR_RL("[snat] ip_vs_genl_parse_snat_dest fail, [%d]\n", ret);
+			goto out;
+		}
 	}
 
 	switch (cmd) {
@@ -3978,6 +4568,15 @@ static int ip_vs_genl_set_cmd(struct sk_buff *skb, struct genl_info *info)
 		break;
 	case IPVS_CMD_DEL_LADDR:
 		ret = ip_vs_del_laddr(svc, &uladdr);
+		break;
+	case IPVS_CMD_NEW_SNATDEST:
+		ret = ip_vs_add_snat_dest(svc, &usnat_dest);
+		break;
+	case IPVS_CMD_SET_SNATDEST:
+		ret = ip_vs_edit_snat_dest(svc, &usnat_dest);
+		break;
+	case IPVS_CMD_DEL_SNATDEST:
+		ret = ip_vs_del_snat_dest(svc, &usnat_dest);
 		break;
 	default:
 		ret = -EINVAL;
@@ -4199,6 +4798,24 @@ static struct genl_ops ip_vs_genl_ops[] __read_mostly = {
 	 .policy = ip_vs_cmd_policy,
 	 .dumpit = ip_vs_genl_dump_laddrs,
 	 },
+	 {
+	  .cmd = IPVS_CMD_NEW_SNATDEST,
+	  .flags = GENL_ADMIN_PERM,
+	  .policy = ip_vs_cmd_policy,
+	  .doit = ip_vs_genl_set_cmd,
+	  },
+	  {
+	  .cmd = IPVS_CMD_SET_SNATDEST,
+	  .flags = GENL_ADMIN_PERM,
+	  .policy = ip_vs_cmd_policy,
+	  .doit = ip_vs_genl_set_cmd,
+	  },
+	  {
+	  .cmd = IPVS_CMD_DEL_SNATDEST,
+	  .flags = GENL_ADMIN_PERM,
+	  .policy = ip_vs_cmd_policy,
+	  .doit = ip_vs_genl_set_cmd,
+	  },
 };
 
 static int __init ip_vs_genl_register(void)
@@ -4294,3 +4911,4 @@ void ip_vs_control_cleanup(void)
 	nf_unregister_sockopt(&ip_vs_sockopts);
 	LeaveFunction(2);
 }
+

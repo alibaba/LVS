@@ -38,7 +38,15 @@
 #define OPT_PERSISTENCE_ENGINE  0x400000
 #define OPT_LOCAL_ADDRESS	0x800000
 #define OPT_SYNPROXY		0x1000000
-#define NUMBER_OF_OPT		25
+#define OPT_SNAT_FROM		0x2000000
+#define OPT_SNAT_TO		0x4000000
+#define OPT_SNAT_GW		0x8000000
+#define OPT_SNAT_SOURCE	0x10000000
+#define OPT_SNAT_ALGO		0x20000000
+#define OPT_SNAT_NEWGW		0x40000000
+#define OPT_SNAT_OUTDEV	0x80000000
+
+#define NUMBER_OF_OPT		32
 
 #define MINIMUM_IPVS_VERSION_MAJOR      1
 #define MINIMUM_IPVS_VERSION_MINOR      1
@@ -60,9 +68,9 @@
  */
 #define IPVS_SVC_PERSISTENT_TIMEOUT	(6*60)
 
-
 typedef struct ip_vs_service_user	ipvs_service_t;
 typedef struct ip_vs_dest_user		ipvs_dest_t;
+typedef struct ip_vs_dest_snat_user  ipvs_snat_dest_t;
 typedef struct ip_vs_laddr_user 	ipvs_laddr_t;
 typedef struct ip_vs_timeout_user	ipvs_timeout_t;
 typedef struct ip_vs_daemon_user	ipvs_daemon_t;
@@ -113,9 +121,16 @@ extern int ipvs_update_dest(ipvs_service_t *svc, ipvs_dest_t *dest);
 /* remove a destination server from a service */
 extern int ipvs_del_dest(ipvs_service_t *svc, ipvs_dest_t *dest);
 
+/* for lvs snat dest */
+extern int ipvs_add_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest);
+extern int ipvs_update_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest);
+extern int ipvs_del_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest);
+
 extern int ipvs_add_laddr(ipvs_service_t *svc, ipvs_laddr_t * laddr);
 extern int ipvs_del_laddr(ipvs_service_t *svc, ipvs_laddr_t * laddr);
 extern struct ip_vs_get_laddrs *ipvs_get_laddrs(ipvs_service_entry_t *svc);
+
+extern void ipvs_service_entry_2_user(const ipvs_service_entry_t *entry, ipvs_service_t *user);
 
 /* set timeout */
 extern int ipvs_set_timeout(ipvs_timeout_t *to);

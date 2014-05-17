@@ -1,1 +1,0 @@
-/home/pukong/git/lvs-kernel/scripts/refresh_patch.sh

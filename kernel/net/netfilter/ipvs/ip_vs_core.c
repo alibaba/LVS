@@ -346,6 +346,15 @@ struct ip_vs_conn *ip_vs_schedule(struct ip_vs_service *svc,
 	/*
 	 *    Create a connection entry.
 	 */
+	
+	if (IS_SNAT_SVC(svc))
+	cp = ip_vs_conn_new(svc->af, iph.protocol,
+			    &iph.saddr, pptr[0],
+			    &iph.daddr, pptr[1],
+			    &iph.daddr, pptr[1],
+			    ip_vs_onepacket_enabled(svc, &iph),
+			    dest, skb, is_synproxy_on);
+	else
 	cp = ip_vs_conn_new(svc->af, iph.protocol,
 			    &iph.saddr, pptr[0],
 			    &iph.daddr, pptr[1],
@@ -745,7 +754,7 @@ handle_response(int af, struct sk_buff *skb, struct ip_vs_protocol *pp,
 	/*
 	 * Syn-proxy step 3 logic: receive syn-ack from rs.
 	 */
-	if (ip_vs_synproxy_synack_rcv(skb, cp, pp, ihl, &ret) == 0) {
+	if (pp->protocol == IPPROTO_TCP && ip_vs_synproxy_synack_rcv(skb, cp, pp, ihl, &ret) == 0) {
 		goto out;
 	}
 
@@ -779,6 +788,49 @@ handle_response(int af, struct sk_buff *skb, struct ip_vs_protocol *pp,
 	return ret;
 }
 
+static unsigned int
+ip_vs_snat_out(int af, struct sk_buff *skb, struct ip_vs_protocol *pp,
+		int *v, struct ip_vs_conn *cp)
+{
+	if (af != AF_INET)
+		return 1;
+
+	if (cp && NOT_SNAT_CP(cp))
+		return 1;
+
+	EnterFunction(11);
+	if (!cp) {
+		skb->mark = 1;
+		if (!pp->conn_schedule(af, skb, pp, v, &cp))
+			return 0;
+
+		if (unlikely(!cp)) {
+			/* sorry, all this trouble for a no-hit :) */
+			IP_VS_DBG_PKT(12, pp, skb, 0,
+				      "packet continues traversal as normal");
+			*v = NF_ACCEPT;
+			return 0;
+		}
+	}
+
+	IP_VS_DBG_PKT(11, pp, skb, 0, "Forward packet");
+	ip_vs_in_stats(cp, skb);
+
+	ip_vs_set_state(cp, IP_VS_DIR_INPUT, skb, pp);
+
+	if (cp->packet_xmit)
+		*v = cp->packet_xmit(skb, cp, pp);
+	/* do not touch skb anymore */
+	else {
+		IP_VS_DBG_RL("warning: packet_xmit is null");
+		*v = NF_ACCEPT;
+	}
+	
+	cp->old_state = cp->state;
+	ip_vs_conn_put(cp);
+	return 0;
+}
+
 /*
  *	It is hooked at the NF_INET_FORWARD chain, used only for VS/NAT.
  *	Check if outgoing packet belongs to the established ip_vs_conn.
@@ -793,6 +845,7 @@ ip_vs_out(unsigned int hooknum, struct sk_buff *skb,
 	struct ip_vs_conn *cp;
 	int af;
 	int res_dir;
+	int verdict;
 
 	EnterFunction(11);
 
@@ -850,6 +903,10 @@ ip_vs_out(unsigned int hooknum, struct sk_buff *skb,
 	 * Check if the packet belongs to an existing entry
 	 */
 	cp = pp->conn_out_get(af, skb, pp, &iph, iph.len, 0, &res_dir);
+
+	if (0 == ip_vs_snat_out(af, skb, pp, &verdict, cp)) {
+		return verdict;
+	}
 
 	if (unlikely(!cp)) {
 		if (sysctl_ip_vs_nat_icmp_send &&
@@ -1304,12 +1361,19 @@ ip_vs_pre_routing(unsigned int hooknum, struct sk_buff *skb,
 	ip_vs_fill_iphdr(af, skb_network_header(skb), &iph);
 
 	/* drop all ip fragment except ospf */
-	if ((sysctl_ip_vs_frag_drop_entry == 1)
-	    && (af == AF_INET)
+	if ((af == AF_INET)
 	    && (ip_hdr(skb)->frag_off & htons(IP_MF | IP_OFFSET))
 	    && (iph.protocol != IPPROTO_OSPF)) {
+		if(sysctl_ip_vs_frag_drop_entry == 1) {
 		IP_VS_INC_ESTATS(ip_vs_esmib, DEFENCE_IP_FRAG_DROP);
 		return NF_DROP;
+		} else {
+			if (ip_vs_gather_frags(skb, IP_DEFRAG_VS_IN))
+				return NF_STOLEN;
+
+			IP_VS_INC_ESTATS(ip_vs_esmib, DEFENCE_IP_FRAG_GATHER);
+			ip_vs_fill_iphdr(af, skb_network_header(skb), &iph);
+		}
 	}
 
 	/* drop udp packet which send to tcp-vip */

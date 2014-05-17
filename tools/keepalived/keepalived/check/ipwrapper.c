@@ -27,10 +27,9 @@
 #include "utils.h"
 #include "notify.h"
 #include "main.h"
-
+#include "check_api.h"
 #include "vrrp_if.h"
 #include "vrrp_netlink.h"
-
 
 static struct {
 	struct nlmsghdr n;
@@ -311,11 +310,26 @@ clear_service_rs(list vs_group, virtual_server * vs, list l)
 	real_server *rs;
 	char rsip[INET6_ADDRSTRLEN];
 
+	if (IS_SNAT_SVC(vs)) {
+	    snat_rule *sr;
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		sr = ELEMENT_DATA(e);
+		if (ISALIVE(sr)) {
+			if (!ipvs_snat_cmd(LVS_CMD_DEL_SNATDEST, vs, sr)) {
+				return 0;
+			}
+			UNSET_ALIVE(sr);
+		}
+	}
+		return 1;
+	}
+	
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		rs = ELEMENT_DATA(e);
 		if (ISALIVE(rs)) {
 			if (!ipvs_cmd(LVS_CMD_DEL_DEST, vs_group, vs, rs))
 				return 0;
+	        
 			UNSET_ALIVE(rs);
 			if (!vs->omega)
 				continue;
@@ -365,9 +379,10 @@ clear_service_vs(list vs_group, virtual_server * vs)
 			if (ISALIVE(vs->s_svr))
 				if (!ipvs_cmd(LVS_CMD_DEL_DEST, vs_group, vs, vs->s_svr))
 					return 0;
-		} else if (!clear_service_rs(vs_group, vs, vs->rs))
+		} else if (!clear_service_rs(vs_group, vs, vs->rs)) {
 			return 0;
 		/* The above will handle Omega case for VS as well. */
+	}
 	}
 
 	if (!ipvs_cmd(LVS_CMD_DEL, vs_group, vs, NULL))
@@ -395,6 +410,52 @@ clear_services(void)
 	return 1;
 }
 
+/* select max weight of rs from vs 
+	* flag == 1: select max weight of alive rs from vs
+	*/
+int
+get_max_weight(int flag, list rs)
+{
+	element e;
+	real_server *crs;
+	int max_weight = -1;
+	
+	for (e = LIST_HEAD(rs); e; ELEMENT_NEXT(e)) {
+		crs = ELEMENT_DATA(e);
+		if (flag == 1 && crs->alive == 0) {
+			continue;
+		}
+		if (max_weight > -1) {
+			max_weight = crs->weight > max_weight ? crs->weight : max_weight;
+		} else {
+			max_weight = crs->weight;
+		}
+	}
+
+	return max_weight;
+}
+
+
+static int
+init_service_snat_rs(virtual_server *vs)
+{
+	element e;
+	snat_rule *rs;
+	
+	for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+		rs = ELEMENT_DATA(e);
+		if (!ISALIVE(rs)) {
+			print_snat_rule(LVS_CMD_ADD_SNATDEST, rs);
+			if (!ipvs_snat_cmd(LVS_CMD_ADD_SNATDEST, vs, rs)) {
+				return 0;
+			}
+			SET_ALIVE(rs);
+		}
+	}
+
+	return 1;
+}
+
 /* Set a realserver IPVS rules */
 static int
 init_service_rs(virtual_server * vs)
@@ -402,6 +463,7 @@ init_service_rs(virtual_server * vs)
 	element e;
 	real_server *rs;
 
+	if (vs->abs_priority == 0) {
 	for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
 		rs = ELEMENT_DATA(e);
 		/* In alpha mode, be pessimistic (or realistic?) and don't
@@ -424,6 +486,34 @@ init_service_rs(virtual_server * vs)
 			SET_ALIVE(rs);
 		}
 	}
+	} else {
+		if (!vs->alpha) {
+			vs->cur_max_weight = get_max_weight(0, vs->rs);
+		}
+		for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+			rs = ELEMENT_DATA(e);
+		if (vs->alpha) {
+			UNSET_ALIVE(rs);
+			continue;
+		}
+
+		if (!ISALIVE(rs)) {
+			if (rs->weight == vs->cur_max_weight && 
+			    !ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs)) {
+				return 0;
+			} else {
+				SET_ALIVE(rs);
+			}
+		} else if (vs->vsgname) {
+			UNSET_ALIVE(rs);
+			if (rs->weight == vs->cur_max_weight && 
+			    !ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs)) {
+				return 0;
+			}
+			SET_ALIVE(rs);
+			}
+		}
+	}
 
 	return 1;
 }
@@ -434,10 +524,11 @@ init_service_vs(virtual_server * vs)
 {
 	/* Init the VS root */
 	if (!ISALIVE(vs) || vs->vsgname) {
-		if (!ipvs_cmd(LVS_CMD_ADD, check_data->vs_group, vs, NULL))
+		if (!ipvs_cmd(LVS_CMD_ADD, check_data->vs_group, vs, NULL)) {
 			return 0;
-		else
+		}  else {
 			SET_ALIVE(vs);
+	}
 	}
 
 	/*Set local ip address in "FNAT" mode of IPVS */
@@ -447,13 +538,23 @@ init_service_vs(virtual_server * vs)
 	}
 
 	/* Processing real server queue */
-	if (!LIST_ISEMPTY(vs->rs)) {
-		if (!init_service_rs(vs))
+	if (NOT_SNAT_SVC(vs) && !LIST_ISEMPTY(vs->rs)) {
+		if (!init_service_rs(vs)) {
 			return 0;
-		if (vs->alpha)
+		}
+	    
+		if (vs->alpha) {
 			vs->quorum_state = DOWN;
-		else
+		}  else {
 			netlink_vipaddress(check_data->vs_group, vs, UP);
+	}
+	}
+
+	if (IS_SNAT_SVC(vs) && !LIST_ISEMPTY(vs->rs)) {
+		//log_message(LOG_INFO, "before init_service_snat_rs\n");
+		if (!init_service_snat_rs(vs)) {
+			return 0;
+		}
 	}
 	return 1;
 }
@@ -579,12 +680,134 @@ update_quorum_state(virtual_server * vs)
 	}
 }
 
+static void
+handle_abspriority_rs_down2up(virtual_server *vs, real_server *rs)
+{
+	element e;
+	real_server *tmp_rs;
+	char rsip[INET6_ADDRSTRLEN];
+	
+	log_message(LOG_INFO, "down2up: vs.alive=%d, vs.max_weight=%d, rs.weight=%d", 
+	                       vs->alive,  vs->cur_max_weight, rs->weight);
+	if ((rs->weight == vs->cur_max_weight || vs->cur_max_weight == -1) && !ISALIVE(rs)) {
+		log_message(LOG_INFO, "down2up: add(%s:%d, %d)", 
+		                       inet_sockaddrtos2(&rs->addr, rsip), 
+		                       ntohs(inet_sockaddrport(&rs->addr)), rs->weight);
+		if (vs->cur_max_weight == -1) {
+			vs->cur_max_weight = rs->weight;
+		}
+		ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs);
+	} else if (rs->weight > vs->cur_max_weight) {
+		/* first: del all rs in lvs */
+		log_message(LOG_INFO, "down2up: del all alive and setted rs in lvs");
+		for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+			tmp_rs = ELEMENT_DATA(e);
+			if (ISALIVE(tmp_rs) && (tmp_rs->set == 1) && tmp_rs->weight == vs->cur_max_weight) {
+				log_message(LOG_INFO, "down2up: del(%s:%d, %d)", 
+				                        inet_sockaddrtos2(&tmp_rs->addr, rsip), 
+				                        ntohs(inet_sockaddrport(&tmp_rs->addr)), tmp_rs->weight);
+				ipvs_cmd(LVS_CMD_DEL_DEST, check_data->vs_group, vs, tmp_rs);
+			}
+		}
+		
+		/*then: add current rs of max weight to lvs */
+		vs->cur_max_weight = rs->weight;
+		log_message(LOG_INFO, "down2up: add(%s:%d, %d)", 
+		                       inet_sockaddrtos2(&rs->addr, rsip), 
+		                       ntohs(inet_sockaddrport(&rs->addr)), 
+		                       rs->weight);
+		ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs);
+	} else {
+		log_message(LOG_INFO, "down2up: nothing todo");
+	}
+	
+	SET_ALIVE(rs);
+	log_message(LOG_INFO, "ALLRS_STAT:");
+	for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+		tmp_rs = ELEMENT_DATA(e);
+		log_message(LOG_INFO, "  (%s:%d), alived=%d, weight=%d, set=%d",  
+		                        inet_sockaddrtos2(&tmp_rs->addr, rsip),
+		                        ntohs(inet_sockaddrport(&tmp_rs->addr)),
+		                        tmp_rs->alive, tmp_rs->weight, tmp_rs->set);
+	}
+	return;
+}
+
+/* Returns the num of alive rs */
+static int 
+alive_num_with_weight(virtual_server *vs, int weight)
+{
+	element e;
+	real_server *svr;
+	int count = 0;
+
+	for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+		svr = ELEMENT_DATA(e);
+		if (ISALIVE(svr) && svr->weight == weight) {
+			count += 1;
+		}
+	}
+	
+	return count;
+}
+
+static void
+handle_abspriority_rs_up2down(virtual_server *vs, real_server *rs)
+{
+	element e;
+	real_server *svr;
+	int max_weight = -1;
+	char rsip[INET6_ADDRSTRLEN];
+	
+	log_message(LOG_INFO, "up2down: vs.alive=%d, vs.max_weight=%d, rs.weight=%d",  
+	                        vs->alive, vs->cur_max_weight, rs->weight);
+	if (ISALIVE(rs) && (rs->set == 1) && rs->weight == vs->cur_max_weight) {
+		log_message(LOG_INFO, "up2down: del(%s:%d, %d)", inet_sockaddrtos2(&rs->addr, rsip), 
+		                        ntohs(inet_sockaddrport(&rs->addr)), rs->weight);
+		ipvs_cmd(LVS_CMD_DEL_DEST, check_data->vs_group, vs, rs);
+		UNSET_ALIVE(rs);
+		if (alive_num_with_weight(vs, vs->cur_max_weight) == 0) {
+			max_weight = get_max_weight(1, vs->rs);
+			if (max_weight != -1) {
+				log_message(LOG_INFO, "up2down: max weight of cur alive rs: %d",  max_weight);
+				for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+					svr = ELEMENT_DATA(e);
+					if (ISALIVE(svr) && (svr->set == 0) && svr->weight == max_weight) {
+						UNSET_ALIVE(svr);
+						log_message(LOG_INFO, "up2down: add(%s:%d, %d)",
+						                        inet_sockaddrtos2(&svr->addr, rsip), 
+						                        ntohs(inet_sockaddrport(&svr->addr)), 
+						                        svr->weight);
+						ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, svr);
+						SET_ALIVE(svr);
+					}
+				}
+			} else {
+				log_message(LOG_INFO, "up2down: all rs unusable");
+			}
+			vs->cur_max_weight = max_weight;
+		}
+	} else {
+		UNSET_ALIVE(rs);
+		log_message(LOG_INFO, "up2down: nothing todo");
+	}
+	
+	log_message(LOG_INFO, "ALLRS_STAT:");
+	for (e = LIST_HEAD(vs->rs); e; ELEMENT_NEXT(e)) {
+		svr = ELEMENT_DATA(e);
+		log_message(LOG_INFO, " (%s:%d) alived=%d, weight=%d, set=%d",   
+		                        inet_sockaddrtos2(&svr->addr, rsip), 
+		                        ntohs(inet_sockaddrport(&svr->addr)), 
+		                        svr->alive, svr->weight, svr->set);
+	}
+	return;
+}
+
 /* manipulate add/remove rs according to alive state */
 void
 perform_svr_state(int alive, virtual_server * vs, real_server * rs)
 {
 	char rsip[INET6_ADDRSTRLEN];
-
 	/*
 	 * | ISALIVE(rs) | alive | context
 	 * | 0           | 0     | first check failed under alpha mode, unreachable here
@@ -601,9 +824,15 @@ perform_svr_state(int alive, virtual_server * vs, real_server * rs)
 				    , ntohs(inet_sockaddrport(&vs->addr)));
 		/* Add only if we have quorum or no sorry server */
 		if (vs->quorum_state == UP || !vs->s_svr || !ISALIVE(vs->s_svr)) {
+			if (vs->abs_priority == 0) {
 			ipvs_cmd(LVS_CMD_ADD_DEST, check_data->vs_group, vs, rs);
-		}
 		rs->alive = alive;
+			} else {
+				log_message(LOG_INFO, "abs_priority mode: down2up");
+				handle_abspriority_rs_down2up(vs, rs);
+			}
+		}
+		
 		if (rs->notify_up) {
 			log_message(LOG_INFO, "Executing [%s] for service [%s]:%d in VS [%s]:%d"
 					    , rs->notify_up
@@ -630,9 +859,15 @@ perform_svr_state(int alive, virtual_server * vs, real_server * rs)
 		 * Remove only if we have quorum or no sorry server
 		 */
 		if (vs->quorum_state == UP || !vs->s_svr || !ISALIVE(vs->s_svr)) {
+			if (vs->abs_priority == 0) {
 			ipvs_cmd(LVS_CMD_DEL_DEST, check_data->vs_group, vs, rs);
-		}
 		rs->alive = alive;
+			} else {
+				log_message(LOG_INFO, "abs_priority mode:up2down");
+				handle_abspriority_rs_up2down(vs, rs);
+			}
+		}
+
 		if (rs->notify_down) {
 			log_message(LOG_INFO, "Executing [%s] for service [%s]:%d in VS [%s]:%d"
 					    , rs->notify_down
@@ -870,6 +1105,30 @@ vs_exist(virtual_server * old_vs)
 	return 0;
 }
 
+
+static int
+snat_rs_exist(snat_rule *old_rs, list l)
+{
+	element e;
+	snat_rule *rs;
+
+	if (LIST_ISEMPTY(l)) {
+		return 0;
+	}
+
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		rs = ELEMENT_DATA(e);
+		if (SNAT_RS_ISEQ(rs, old_rs)) {
+			rs->alive = old_rs->alive;
+			rs->set = old_rs->set;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+
 /* Check if rs is in new vs data */
 static int
 rs_exist(real_server * old_rs, list l)
@@ -924,12 +1183,40 @@ get_rs_list(virtual_server * vs)
 	return NULL;
 }
 
+/* Clear the diff rs of the old snat vs */
+static int
+clear_diff_snat_rs(virtual_server *old_vs)
+{
+	element e;
+	list l = old_vs->rs;
+	list new = get_rs_list(old_vs);
+	snat_rule *rs;
+
+	if (LIST_ISEMPTY(l)) {
+		return 1;
+	}
+
+	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
+		rs = ELEMENT_DATA(e);
+		if (!snat_rs_exist(rs, new)) {
+			print_snat_rule(LVS_CMD_DEL_SNATDEST, rs);
+			/* Set alive flag to delete the failed inhibit entries */
+			if (!ipvs_snat_cmd(LVS_CMD_DEL_SNATDEST, old_vs, rs)) {
+				return 0;
+			}
+		}
+	}
+
+	return 1;
+}
+
 /* Clear the diff rs of the old vs */
 static int
 clear_diff_rs(virtual_server * old_vs)
 {
 	element e;
 	list l = old_vs->rs;
+	int new_max_weight = -1;
 	list new = get_rs_list(old_vs);
 	real_server *rs;
 	char rsip[INET6_ADDRSTRLEN];
@@ -938,13 +1225,23 @@ clear_diff_rs(virtual_server * old_vs)
 	if (LIST_ISEMPTY(l))
 		return 1;
 
+	if (old_vs->abs_priority) {
+		new_max_weight = get_max_weight(0, new);
+		log_message(LOG_INFO, "abs_priority_mode: reload: max_weight=%d", new_max_weight);
+	}
 	for (e = LIST_HEAD(l); e; ELEMENT_NEXT(e)) {
 		rs = ELEMENT_DATA(e);
-		if (!rs_exist(rs, new)) {
+		if (((old_vs->abs_priority == 1) && ISALIVE(rs) && (rs->set == 1) && rs->weight < new_max_weight)
+			|| !rs_exist(rs, new)) {
+			if ((old_vs->abs_priority == 1) && ISALIVE(rs) && (rs->set == 1) && rs->weight < new_max_weight) {
+				log_message(LOG_INFO, "abs_priority_mode:%d(weight of rs[%s:%d]) < %d(weight of new_rs_list)", rs->weight, 
+					inet_sockaddrtos(&rs->addr), ntohs(inet_sockaddrport(&rs->addr)), new_max_weight);
+			} else {
 			/* Reset inhibit flag to delete inhibit entries */
 			log_message(LOG_INFO, "service [%s]:%d no longer exist"
 					    , inet_sockaddrtos(&rs->addr)
 					    , ntohs(inet_sockaddrport(&rs->addr)));
+			}
 			log_message(LOG_INFO, "Removing service [%s]:%d from VS [%s]:%d"
 					    , inet_sockaddrtos2(&rs->addr, rsip)
 					    , ntohs(inet_sockaddrport(&rs->addr))
@@ -1052,21 +1349,34 @@ clear_diff_services(void)
 		 * reloaded.
 		 */
 		if (!vs_exist(vs)) {
-			if (vs->vsgname)
-				log_message(LOG_INFO, "Removing Virtual Server Group [%s]"
-						    , vs->vsgname);
-			else
-				log_message(LOG_INFO, "Removing Virtual Server [%s]:%d"
-						    , inet_sockaddrtos(&vs->addr)
-						    , ntohs(inet_sockaddrport(&vs->addr)));
+			if (vs->vsgname) {
+				log_message(LOG_INFO, "Removing Virtual Server Group [%s]", 
+							vs->vsgname);
+			} else {
+				if (vs->vfwmark) {
+					log_message(LOG_INFO, "Removing Virtual Server -f [%d]",
+							vs->vfwmark);
+				} else {
+					log_message(LOG_INFO, "Removing Virtual Server [%s]:%d",
+							inet_sockaddrtos(&vs->addr),
+							ntohs(inet_sockaddrport(&vs->addr)));
+				}
+			}
 
 			/* Clear VS entry */
-			if (!clear_service_vs(old_check_data->vs_group, vs))
+			if (!clear_service_vs(old_check_data->vs_group, vs)) {
 				return 0;
+			}
 		} else {
 			/* If vs exist, perform rs pool diff */
-			if (!clear_diff_rs(vs))
+		if (NOT_SNAT_SVC(vs) && !clear_diff_rs(vs)) {
+			return 0;
+		}
+        
+		if (IS_SNAT_SVC(vs) && !clear_diff_snat_rs(vs)) {
 				return 0;
+		}
+        
 			if (vs->s_svr)
 				if (ISALIVE(vs->s_svr))
 					if (!ipvs_cmd(LVS_CMD_DEL_DEST
@@ -1074,6 +1384,7 @@ clear_diff_services(void)
 						      , vs
 						      , vs->s_svr))
 						return 0;
+                
 			/* perform local address diff */
 			if (!clear_diff_laddr(vs))
 				return 0;
@@ -1082,3 +1393,4 @@ clear_diff_services(void)
 
 	return 1;
 }
+

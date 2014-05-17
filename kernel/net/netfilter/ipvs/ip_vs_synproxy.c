@@ -755,6 +755,34 @@ void ip_vs_synproxy_dnat_handler(struct tcphdr *tcph, struct ip_vs_seq *sp_seq)
 	}
 }
 
+static inline void
+ip_vs_synproxy_save_fast_xmit_info(struct sk_buff *skb, struct ip_vs_conn *cp)
+{
+	/* Save info for L2 fast xmit */
+	if(sysctl_ip_vs_fast_xmit_inside && skb->dev &&
+				likely(skb->dev->type == ARPHRD_ETHER) &&
+				skb_mac_header_was_set(skb)) {
+		struct ethhdr *eth = (struct ethhdr *)skb_mac_header(skb);
+
+		if(likely(cp->dev_inside == NULL)) {
+			cp->dev_inside = skb->dev;
+			dev_hold(cp->dev_inside);
+		}
+
+		if (unlikely(cp->dev_inside != skb->dev)) {
+			dev_put(cp->dev_inside);
+			cp->dev_inside = skb->dev;
+			dev_hold(cp->dev_inside);
+		}
+
+		memcpy(cp->src_hwaddr_inside, eth->h_source, ETH_ALEN);
+		memcpy(cp->dst_hwaddr_inside, eth->h_dest, ETH_ALEN);
+		IP_VS_INC_ESTATS(ip_vs_esmib, FAST_XMIT_SYNPROXY_SAVE_INSIDE);
+		IP_VS_DBG_RL("synproxy_save_fast_xmit netdevice:%s\n",
+						netdev_name(skb->dev));
+	}
+}
+
 /*
  * Syn-proxy step 3 logic: receive syn-ack from rs
  * Update syn_proxy_seq.delta and send stored ack skbs
@@ -808,6 +836,8 @@ ip_vs_synproxy_synack_rcv(struct sk_buff *skb, struct ip_vs_conn *cp,
 			IP_VS_DBG_RL("port:%u->%u", ntohs(th->source),
 				     ntohs(th->dest));
 		}
+
+		ip_vs_synproxy_save_fast_xmit_info(skb, cp); 
 
 		/* First: free stored syn skb */
 		if ((tmp_skb = xchg(&cp->syn_skb, NULL)) != NULL) {

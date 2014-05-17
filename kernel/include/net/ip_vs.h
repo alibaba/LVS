@@ -426,6 +426,9 @@ struct ip_vs_conn {
 	struct net_device	*indev;
 	unsigned char		src_hwaddr[MAX_ADDR_LEN];
 	unsigned char		dst_hwaddr[MAX_ADDR_LEN];
+	struct net_device	*dev_inside;
+	unsigned char		src_hwaddr_inside[ETH_ALEN];
+	unsigned char		dst_hwaddr_inside[ETH_ALEN];
 };
 
 /*
@@ -463,6 +466,20 @@ struct ip_vs_dest_user_kern {
 	/* thresholds for active connections */
 	u32 u_threshold;	/* upper threshold */
 	u32 l_threshold;	/* lower threshold */
+};
+
+struct ip_vs_snat_dest_user_kern {
+	//struct ip_vs_dest_user_kern dest;    
+	union nf_inet_addr saddr; /* source address */    
+	u32 smask; /* soure network mask */    
+	union nf_inet_addr daddr; /* dest address */   
+	u32 dmask; /* dest network mask */   
+	union nf_inet_addr  gw;/* isp gateway */    
+	union nf_inet_addr minip, maxip; /* snat ip */    
+	u8 algo; /* snat source ip address choice algo */    
+	union nf_inet_addr new_gw; /* dest gateway */   
+	unsigned conn_flags; /* connection flags */    
+	char out_dev[IP_VS_IFNAME_MAXLEN];
 };
 
 struct ip_vs_laddr_user_kern {
@@ -544,6 +561,33 @@ struct ip_vs_dest {
 	__be16 vport;		/* virtual port number */
 	__u32 vfwmark;		/* firewall mark of service */
 };
+
+struct ip_vs_dest_snat {
+	struct ip_vs_dest dest;
+
+	/* snat rule */
+	union nf_inet_addr saddr;
+	union nf_inet_addr smask;
+	union nf_inet_addr daddr;
+	union nf_inet_addr dmask;
+	union nf_inet_addr minip, maxip; /* snat ip */
+	u8 ip_sel_algo;
+	union nf_inet_addr new_gateway;
+	char out_dev[IP_VS_IFNAME_MAXLEN];
+	unsigned char out_dev_mask[IP_VS_IFNAME_MAXLEN];
+	struct list_head rule_list;
+};
+
+#define IS_SNAT_CP(cp) ((cp)->dest && \
+			 (cp)->dest->svc && \
+			 (cp)->dest->svc->fwmark == 1)
+
+#define NOT_SNAT_CP(cp) (!(cp)->dest || \
+			  !(cp)->dest->svc || \
+			  (cp)->dest->svc->fwmark != 1)
+
+#define IS_SNAT_SVC(svc) ((svc)->fwmark == 1)
+#define NOT_SNAT_SVC(svc) ((svc)->fwmark != 1)
 
 /*
  *	Local ip address object, now only used in FULL NAT model
@@ -702,14 +746,20 @@ enum {
 	SYNPROXY_CONN_REUSED_CLOSEWAIT,
 	SYNPROXY_CONN_REUSED_LASTACK,
 	DEFENCE_IP_FRAG_DROP,
+	DEFENCE_IP_FRAG_GATHER,
 	DEFENCE_TCP_DROP,
 	DEFENCE_UDP_DROP,
 	FAST_XMIT_REJECT,
 	FAST_XMIT_PASS,
+	FAST_XMIT_FAILED,
 	FAST_XMIT_SKB_COPY,
 	FAST_XMIT_NO_MAC,
 	FAST_XMIT_SYNPROXY_SAVE,
 	FAST_XMIT_DEV_LOST,
+	FAST_XMIT_REJECT_INSIDE,
+	FAST_XMIT_PASS_INSIDE,
+	FAST_XMIT_FAILED_INSIDE,
+	FAST_XMIT_SYNPROXY_SAVE_INSIDE,
 	RST_IN_SYN_SENT,
 	RST_OUT_SYN_SENT,
 	RST_IN_ESTABLISHED,
@@ -954,6 +1004,7 @@ extern int sysctl_ip_vs_tcp_drop_entry;
 extern int sysctl_ip_vs_udp_drop_entry;
 extern int sysctl_ip_vs_conn_expire_tcp_rst;
 extern int sysctl_ip_vs_fast_xmit;
+extern int sysctl_ip_vs_fast_xmit_inside;
 
 extern struct ip_vs_service *ip_vs_service_get(int af, __u32 fwmark,
 					       __u16 protocol,
@@ -1054,6 +1105,9 @@ extern int ip_vs_normal_response_icmp_xmit(struct sk_buff *skb,
 extern int ip_vs_fnat_response_icmp_xmit(struct sk_buff *skb,
 					 struct ip_vs_protocol *pp,
 					 struct ip_vs_conn *cp, int offset);
+
+extern int ip_vs_snat_out_xmit
+	(struct sk_buff *skb, struct ip_vs_conn *cp, struct ip_vs_protocol *pp);
 
 #ifdef CONFIG_IP_VS_IPV6
 extern int ip_vs_bypass_xmit_v6

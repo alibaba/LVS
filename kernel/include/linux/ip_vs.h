@@ -8,7 +8,7 @@
 
 #include <linux/types.h>	/* For __beXX types in userland */
 
-#define IP_VS_VERSION_CODE	0x010201
+#define IP_VS_VERSION_CODE	0x010202
 #define NVERSION(version)			\
 	(version >> 16) & 0xFF,			\
 	(version >> 8) & 0xFF,			\
@@ -57,7 +57,10 @@
 #define IP_VS_SO_SET_ZERO	(IP_VS_BASE_CTL+15)
 #define IP_VS_SO_SET_ADDLADDR	(IP_VS_BASE_CTL+16)
 #define IP_VS_SO_SET_DELLADDR	(IP_VS_BASE_CTL+17)
-#define IP_VS_SO_SET_MAX	IP_VS_SO_SET_DELLADDR
+#define IP_VS_SO_SET_ADDSNAT (IP_VS_BASE_CTL + 18)
+#define IP_VS_SO_SET_DELSNAT (IP_VS_BASE_CTL + 19)
+#define IP_VS_SO_SET_EDITSNAT (IP_VS_BASE_CTL + 20)
+#define IP_VS_SO_SET_MAX	 IP_VS_SO_SET_EDITSNAT	
 
 #define IP_VS_SO_GET_VERSION	IP_VS_BASE_CTL
 #define IP_VS_SO_GET_INFO	(IP_VS_BASE_CTL+1)
@@ -68,7 +71,8 @@
 #define IP_VS_SO_GET_TIMEOUT	(IP_VS_BASE_CTL+6)
 #define IP_VS_SO_GET_DAEMON	(IP_VS_BASE_CTL+7)
 #define IP_VS_SO_GET_LADDRS	(IP_VS_BASE_CTL+8)
-#define IP_VS_SO_GET_MAX	IP_VS_SO_GET_LADDRS
+#define IP_VS_SO_GET_SNAT (IP_VS_BASE_CTL + 9) /* not used now */
+#define IP_VS_SO_GET_MAX	 IP_VS_SO_GET_SNAT
 
 /*
  *      IPVS Connection Flags
@@ -125,6 +129,26 @@ struct ip_vs_dest_user {
 	/* thresholds for active connections */
 	__u32 u_threshold;	/* upper threshold */
 	__u32 l_threshold;	/* lower threshold */
+};
+
+/* SNAT ip pool select algorithm */
+enum {
+	IPVS_SNAT_IPS_NORMAL = 0, /* src-ip/dst-ip */
+	IPVS_SNAT_IPS_PERSITENT,  /* src-ip */
+	IPVS_SNAT_IPS_RANDOM,     /* src-ip/dst-ip/src-port */
+};
+
+struct ip_vs_dest_snat_user {
+	__be32 saddr; /* SNAT source address */
+	__be16 smask; /* SNAT source network mask */
+	__be32 daddr; /* SNAT dest address */
+	__be16 dmask; /* SNAT dest network mask */
+	__be32 gw; /* SNAT orign gateway */
+	__be32 min_source_ip, max_source_ip; /* SNAT ip pool */
+	__u8 algo; /* SNAT ip pool select algorithm */
+	unsigned conn_flags;
+	__be32 new_gw; /* SNAT new next gateway */
+	char out_dev[IP_VS_IFNAME_MAXLEN];
 };
 
 struct ip_vs_laddr_user {
@@ -313,6 +337,11 @@ enum {
 	IPVS_CMD_DEL_LADDR,	/* del local address */
 	IPVS_CMD_GET_LADDR,	/* dump local address */
 
+	IPVS_CMD_NEW_SNATDEST, /* add snat rule */
+	IPVS_CMD_SET_SNATDEST,  /* edit snat rule */
+	IPVS_CMD_DEL_SNATDEST, /* del snat rule */
+	IPVS_CMD_GET_SNATDEST, /* dump snat rule */
+
 	__IPVS_CMD_MAX,
 };
 
@@ -328,10 +357,11 @@ enum {
 	IPVS_CMD_ATTR_TIMEOUT_TCP_FIN,	/* TCP FIN wait timeout */
 	IPVS_CMD_ATTR_TIMEOUT_UDP,	/* UDP timeout */
 	IPVS_CMD_ATTR_LADDR,	/* nested local address attribute */
+	IPVS_CMD_ATTR_SNATDEST,  /* nested snat rule attribute */
 	__IPVS_CMD_ATTR_MAX,
 };
 
-#define IPVS_CMD_ATTR_MAX (__IPVS_SVC_ATTR_MAX - 1)
+#define IPVS_CMD_ATTR_MAX (__IPVS_CMD_ATTR_MAX - 1)
 
 /*
  * Attributes used to describe a service
@@ -352,6 +382,7 @@ enum {
 	IPVS_SVC_ATTR_NETMASK,	/* persistent netmask */
 
 	IPVS_SVC_ATTR_STATS,	/* nested attribute for service stats */
+
 	__IPVS_SVC_ATTR_MAX,
 };
 
@@ -378,16 +409,42 @@ enum {
 	IPVS_DEST_ATTR_PERSIST_CONNS,	/* persistent connections */
 
 	IPVS_DEST_ATTR_STATS,	/* nested attribute for dest stats */
+
+	IPVS_DEST_ATTR_SNATRULE, /* nested attribute for dest snat rule */
+
 	__IPVS_DEST_ATTR_MAX,
 };
 
 #define IPVS_DEST_ATTR_MAX (__IPVS_DEST_ATTR_MAX - 1)
 
-/*
- *  * Attirbutes used to describe a local address
- *   *
- *    */
 
+/**
+	* Attribute used to describe a snat dest (snat rule)
+	* Used inside nested attribute IPVS_CMD_ATTR_SNATDEST and IPVS_DEST_ATTR_SNATRULE
+	*/
+enum {
+	IPVS_SNAT_DEST_ATTR_UNSPEC = 0,
+	IPVS_SNAT_DEST_ATTR_FADDR,
+	IPVS_SNAT_DEST_ATTR_FMASK,
+	IPVS_SNAT_DEST_ATTR_DADDR,
+	IPVS_SNAT_DEST_ATTR_DMASK,
+	IPVS_SNAT_DEST_ATTR_GW,
+	IPVS_SNAT_DEST_ATTR_MINIP,
+	IPVS_SNAT_DEST_ATTR_MAXIP,
+	IPVS_SNAT_DEST_ATTR_ALGO,
+	IPVS_SNAT_DEST_ATTR_NEWGW,
+	IPVS_SNAT_DEST_ATTR_CONNFLAG,
+	IPVS_SNAT_DEST_ATTR_OUTDEV,
+    
+	__IPVS_SNAT_DEST_ATTR_MAX,
+};
+
+#define IPVS_SNAT_DEST_ATTR_MAX (__IPVS_SNAT_DEST_ATTR_MAX - 1)
+
+
+/*
+ * Attirbutes used to describe a local address
+ */
 enum {
 	IPVS_LADDR_ATTR_UNSPEC = 0,
 	IPVS_LADDR_ATTR_ADDR,
@@ -447,3 +504,4 @@ enum {
 #define IPVS_INFO_ATTR_MAX (__IPVS_INFO_ATTR_MAX - 1)
 
 #endif				/* _IP_VS_H */
+
