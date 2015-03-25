@@ -2256,7 +2256,7 @@ got_hash:
 
 	map = rcu_dereference(rxqueue->rps_map);
 	if (map) {
-		tcpu = map->cpus[((u64) skb->rxhash * map->len) >> 32];
+		tcpu = map->cpus[((u64) skb->rxhash * map->len) >> 16];
 
 		if (cpu_online(tcpu)) {
 			cpu = tcpu;
@@ -2736,6 +2736,89 @@ out:
 	return ret;
 }
 
+int sysctl_rps_framework __read_mostly = 0;
+EXPORT_SYMBOL(sysctl_rps_framework);
+
+static DEFINE_SPINLOCK(rps_table_lock);
+static struct list_head rps_table[IPPROTO_MAX]__read_mostly;
+
+static void init_rps_framework(void)
+{
+	int i = 0;
+
+	for (; i < IPPROTO_MAX; i++) 
+		INIT_LIST_HEAD(&rps_table[i]);
+}
+
+int rps_register(struct netif_rps_entry *re) 
+{
+	int ret = 0; 
+
+	if (re->proto >= IPPROTO_MAX)
+		return -EINVAL;
+
+	if (re->rps_init) {
+		ret = re->rps_init();
+		if (ret < 0) 
+		  return ret; 
+	}    
+
+	spin_lock(&rps_table_lock);
+
+	/* RPS_CONTINUE entries are in the head of the list */
+	if (re->flags == RPS_CONTINUE)
+		list_add_rcu(&re->list, &rps_table[re->proto]);
+	/* RPS_STOP entries are in the tail of the list */
+	else if (re->flags == RPS_STOP)
+		list_add_tail_rcu(&re->list, &rps_table[re->proto]);
+
+	spin_unlock(&rps_table_lock);
+
+	return ret; 
+}
+EXPORT_SYMBOL(rps_register);
+
+int rps_unregister(struct netif_rps_entry *re) 
+{
+	spin_lock(&rps_table_lock);
+	list_del_rcu(&re->list);
+	spin_unlock(&rps_table_lock);
+
+	if (re->rps_uninit)
+		re->rps_uninit();
+
+	return 0;
+}
+EXPORT_SYMBOL(rps_unregister);
+
+static int netif_rps_process(struct sk_buff *skb)
+{
+	int ret = -1;
+
+	/* Only support IPV4 */
+	if (skb->protocol != htons(ETH_P_IP)) {
+		goto out;
+	}
+
+	if (pskb_may_pull(skb, sizeof(struct iphdr))) {
+		struct iphdr *iph = (struct iphdr *)skb->data;
+		u8 ip_proto = iph->protocol;
+		struct netif_rps_entry *p;
+
+		list_for_each_entry_rcu(p, &rps_table[ip_proto], list) {
+			ret = p->rps_process(skb);
+			/* Loop will break after a RPS_STOP entry returns no less than 0 */
+			if (ret >= 0) {
+				//printk(KERN_INFO "%s,cpu %d,sip %pI4,dip %pI4\n", __func__, ret, &iph->saddr, &iph->daddr);
+				goto out;
+			}
+		}
+	}
+
+out:
+	return ret;
+}
+
 /**
  *	netif_receive_skb - process receive buffer from network
  *	@skb: buffer to process
@@ -2754,9 +2837,13 @@ out:
 int netif_receive_skb(struct sk_buff *skb)
 {
 	struct rps_dev_flow voidflow, *rflow = &voidflow;
-	int cpu, ret;
+	int cpu = -1, ret;
 
-	cpu = get_rps_cpu(skb->dev, skb, &rflow);
+	if (sysctl_rps_framework)
+		cpu = netif_rps_process(skb);
+
+	if (-1 == cpu)
+		cpu = get_rps_cpu(skb->dev, skb, &rflow);
 
 	if (cpu >= 0)
 		ret = enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
@@ -6151,6 +6238,8 @@ static int __init net_dev_init(void)
 
 	if (register_pernet_subsys(&netdev_net_ops))
 		goto out;
+
+	init_rps_framework();
 
 	/*
 	 *	Initialise the packet receive queues.

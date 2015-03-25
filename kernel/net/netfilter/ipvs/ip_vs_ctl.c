@@ -1164,14 +1164,66 @@ static inline int laddr_to_cpuid(int af, const union nf_inet_addr *addr)
 					sysctl_ip_vs_reserve_core;
 }
 
+struct laddr_cpu_t
+{
+	struct hlist_node hlist;
+	struct rcu_head  rcu_head;
+	int cpuid;
+	int refcnt;
+	__be32 addr;
+};
+
+#define LADDR_CPU_HASH_SIZE LADDR_MASK + 1
+static struct hlist_head laddr_cpu_map[LADDR_CPU_HASH_SIZE];
+static DEFINE_SPINLOCK(laddr_cpu_map_lock);
+
+static struct laddr_cpu_t *lookup_laddr_cpu(__be32 addr)
+{
+	struct hlist_head *head;
+	struct hlist_node *node;
+	struct laddr_cpu_t *p;
+
+	head = &laddr_cpu_map[ntohl(addr) & LADDR_MASK];
+	hlist_for_each_entry_rcu(p, node, head, hlist) {
+		if (p->addr == addr)
+			return p;
+	}
+
+	return NULL;
+}
+
 void ip_vs_laddr_hold(struct ip_vs_laddr *laddr)
 {
 	atomic_inc(&laddr->refcnt);
 }
 
+static void rcu_free_laddr_cpu(struct rcu_head *head)
+{
+	struct laddr_cpu_t *laddr_cpu = container_of(head, struct laddr_cpu_t, rcu_head);
+#ifdef CONFIG_IP_VS_DEBUG
+	IP_VS_DBG(0, "%s,%pI4,cpu %d,refcnt %d\n", __func__, &laddr_cpu->addr, laddr_cpu->cpuid, laddr_cpu->refcnt);
+#endif
+	kfree(laddr_cpu);
+}
+
 void ip_vs_laddr_put(struct ip_vs_laddr *laddr)
 {
 	if (atomic_dec_and_test(&laddr->refcnt)) {
+		struct laddr_cpu_t *laddr_cpu;
+
+		spin_lock(&laddr_cpu_map_lock);
+		laddr_cpu = lookup_laddr_cpu(laddr->addr.ip);
+		if (laddr_cpu) {
+			if ((--laddr_cpu->refcnt) <= 0) {
+				hlist_del_rcu(&laddr_cpu->hlist);
+				call_rcu(&laddr_cpu->rcu_head, rcu_free_laddr_cpu);
+			}
+#ifdef CONFIG_IP_VS_DEBUG
+			IP_VS_DBG(0, "%s,%pI4,cpu %d,refcnt %d\n", __func__, &laddr_cpu->addr, laddr_cpu->cpuid, laddr_cpu->refcnt);
+#endif
+		}
+		spin_unlock(&laddr_cpu_map_lock);
+
 		kfree(laddr);
 	}
 }
@@ -1235,6 +1287,7 @@ ip_vs_add_laddr(struct ip_vs_service *svc, struct ip_vs_laddr_user_kern *uladdr)
 	struct ip_vs_service *this_svc;
 	int cpu;
 	int ret;
+	struct laddr_cpu_t *laddr_cpu;
 
 	IP_VS_DBG_BUF(0, "vip %s:%d add local address %s\n",
 		      IP_VS_DBG_ADDR(svc->af, &svc->addr), ntohs(svc->port),
@@ -1255,6 +1308,30 @@ ip_vs_add_laddr(struct ip_vs_service *svc, struct ip_vs_laddr_user_kern *uladdr)
 	ret = ip_vs_new_laddr(svc, uladdr, &laddr);
 	if (ret) {
 		return ret;
+	}
+
+	spin_lock(&laddr_cpu_map_lock);
+	laddr_cpu = lookup_laddr_cpu(laddr->addr.ip);
+	if (laddr_cpu) {
+		++(laddr_cpu->refcnt);
+	}
+	spin_unlock(&laddr_cpu_map_lock);
+
+	if (!laddr_cpu) {
+		laddr_cpu = kzalloc(sizeof(struct laddr_cpu_t), GFP_ATOMIC);
+		if (!laddr_cpu) {
+			kfree(laddr);
+			pr_err("%s():no memory.\n", __func__);
+			return -ENOMEM;
+		}
+
+		laddr_cpu->cpuid = laddr->cpuid;
+		laddr_cpu->addr = laddr->addr.ip;
+		laddr_cpu->refcnt = 1;
+		
+		spin_lock(&laddr_cpu_map_lock);
+		hlist_add_head_rcu(&laddr_cpu->hlist, &laddr_cpu_map[ntohl(laddr_cpu->addr) & LADDR_MASK]);
+		spin_unlock(&laddr_cpu_map_lock);
 	}
 
 	/*
@@ -1551,7 +1628,7 @@ static void __ip_vs_del_service(struct ip_vs_service *svc)
 {
 	struct ip_vs_dest *dest, *nxt;
 	struct ip_vs_laddr *laddr, *laddr_next;
-	struct ip_vs_scheduler *old_sched;
+	struct ip_vs_scheduler *old_sched = NULL;
 	struct ip_vs_service *this_svc;
 	int cpu = 0;
 
@@ -4387,6 +4464,39 @@ static int __init alloc_svc_tab(void)
 
 /* End of Generic Netlink interface definitions */
 
+static int process_laddr_rps(struct sk_buff *skb)
+{
+	struct iphdr *iph = (struct iphdr *)skb->data;
+	struct laddr_cpu_t *laddr_cpu;
+	int cpu = -1;
+
+	rcu_read_lock();
+	laddr_cpu = lookup_laddr_cpu(iph->daddr);
+	if (laddr_cpu)
+		cpu = laddr_cpu->cpuid;
+	rcu_read_unlock();
+
+	return cpu;
+}
+
+static struct netif_rps_entry tcp_laddr_rps_entry = {
+	.proto = IPPROTO_TCP,
+	.flags = RPS_CONTINUE,
+	.rps_process = process_laddr_rps,
+	.rps_init = NULL,
+	.rps_uninit = NULL,
+	.list = LIST_HEAD_INIT(tcp_laddr_rps_entry.list),
+};
+
+static struct netif_rps_entry udp_laddr_rps_entry = {
+	.proto = IPPROTO_UDP,
+	.flags = RPS_STOP,
+	.rps_process = process_laddr_rps,
+	.rps_init = NULL,
+	.rps_uninit = NULL,
+	.list = LIST_HEAD_INIT(udp_laddr_rps_entry.list),
+};
+
 int __init ip_vs_control_init(void)
 {
 	int ret;
@@ -4447,6 +4557,12 @@ int __init ip_vs_control_init(void)
 		INIT_LIST_HEAD(&per_cpu(ip_vs_dest_trash_percpu, cpu));
 	}
 
+	for (idx = 0; idx < LADDR_CPU_HASH_SIZE; ++idx)
+		INIT_HLIST_HEAD(&laddr_cpu_map[idx]);
+
+	rps_register(&tcp_laddr_rps_entry);
+	rps_register(&udp_laddr_rps_entry);
+
 	LeaveFunction(2);
 	return 0;
 
@@ -4465,6 +4581,8 @@ out_err:
 void ip_vs_control_cleanup(void)
 {
 	EnterFunction(2);
+	rps_unregister(&udp_laddr_rps_entry);
+	rps_unregister(&tcp_laddr_rps_entry);
 	ip_vs_trash_cleanup();
 	ip_vs_del_stats(ip_vs_stats);
 	unregister_sysctl_table(sysctl_header);
@@ -4475,5 +4593,7 @@ void ip_vs_control_cleanup(void)
 	ip_vs_genl_unregister();
 	nf_unregister_sockopt(&ip_vs_sockopts);
 	free_svc_tab();
+	/* Wait all rcu callback to complete */
+	rcu_barrier();
 	LeaveFunction(2);
 }

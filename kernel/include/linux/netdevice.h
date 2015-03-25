@@ -181,6 +181,22 @@ enum {
 #include <linux/cache.h>
 #include <linux/skbuff.h>
 
+#define RPS_CONTINUE	0x1 /* Continue traversing RPS list */
+#define RPS_STOP	0x2 /* Stop traversing RPS list */
+
+struct netif_rps_entry
+{
+	unsigned char proto;
+	unsigned char flags;
+	int (*rps_process)(struct sk_buff *skb);
+	int (*rps_init)(void);
+	void (*rps_uninit)(void);
+	struct list_head list;
+};
+
+extern int rps_register(struct netif_rps_entry *re);
+extern int rps_unregister(struct netif_rps_entry *re);
+
 struct neighbour;
 struct neigh_parms;
 struct sk_buff;
@@ -1731,6 +1747,7 @@ extern int		dev_forward_skb(struct net_device *dev,
 					struct sk_buff *skb);
 
 extern int		netdev_budget;
+extern int		sysctl_rps_framework;
 
 /* Called by rtnetlink.c:rtnl_unlock() */
 extern void netdev_run_todo(void);
