@@ -163,6 +163,13 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	{
+		.procname	= "rps_framework",
+		.data		= &sysctl_rps_framework,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec
+	},
+	{
 		.ctl_name	= NET_CORE_WARNINGS,
 		.procname	= "warnings",
 		.data		= &net_msg_warn,
