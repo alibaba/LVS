@@ -1226,6 +1226,7 @@ static void tcp_send_rst_in(struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
 		skb_reset_network_header(skb);
 		iph->version = 4;
 		iph->ihl = 5;
+		iph->tos = 0;
 		iph->tot_len = htons(skb->len);
 		iph->frag_off = htons(IP_DF);
 		iph->ttl = IPDEFTTL;
@@ -1344,6 +1345,7 @@ static void tcp_send_rst_out(struct ip_vs_protocol *pp, struct ip_vs_conn *cp)
 		skb_reset_network_header(skb);
 		iph->version = 4;
 		iph->ihl = 5;
+		iph->tos = 0;
 		iph->tot_len = htons(skb->len);
 		iph->frag_off = htons(IP_DF);
 		iph->ttl = IPDEFTTL;
