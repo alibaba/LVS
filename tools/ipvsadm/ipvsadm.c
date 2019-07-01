@@ -1546,29 +1546,27 @@ static void check_ipvs_version(void)
 
 static void print_conn(char *buf, unsigned int format)
 {
-	char            protocol[8];
-	unsigned short  proto;
-	union nf_inet_addr  caddr;
-	unsigned short  cport;
-	union nf_inet_addr  vaddr;
-	unsigned short  vport;
-	union nf_inet_addr  daddr;
-	unsigned short  dport;
-	char            state[16];
-	unsigned int    expires;
+	int n;
+	char protocol[8];
+	char state[16];
+	char expire_str[12];
 	unsigned short  af = AF_INET;
+	unsigned int    expires;
+	unsigned int	minutes, seconds;
+	unsigned short  proto;
+	unsigned short  cport, vport, lport, dport;
+	union nf_inet_addr  caddr;
+	union nf_inet_addr  vaddr;
+	union nf_inet_addr  laddr;
+	union nf_inet_addr  daddr;
 	char		pe_name[IP_VS_PENAME_MAXLEN];
 	char		pe_data[IP_VS_PEDATA_MAXLEN];
+	char cip[INET6_ADDRSTRLEN], vip[INET6_ADDRSTRLEN], lip[INET6_ADDRSTRLEN], dip[INET6_ADDRSTRLEN];
+	char *cname, *vname, *lname, *dname;
 
-	int n;
-	char temp1[INET6_ADDRSTRLEN], temp2[INET6_ADDRSTRLEN], temp3[INET6_ADDRSTRLEN];
-	char *cname, *vname, *dname;
-	unsigned int	minutes, seconds;
-	char		expire_str[12];
-
-	if ((n = sscanf(buf, "%s %s %hX %s %hX %s %hX %s %d %s %s",
-			protocol, temp1, &cport, temp2, &vport,
-			temp3, &dport, state, &expires,
+	if ((n = sscanf(buf, "%s %s %hX %s %hX %s %hX %s %hX %s %d %s %s",
+			protocol, cip, &cport, vip, &vport, lip, &lport,
+			dip, &dport, state, &expires,
 			pe_name, pe_data)) == -1)
 		exit(1);
 
@@ -1579,22 +1577,27 @@ static void print_conn(char *buf, unsigned int format)
 	else
 		proto = 0;
 
-	if (inet_pton(AF_INET6, temp1, &caddr.in6) > 0) {
-		inet_pton(AF_INET6, temp2, &vaddr.in6);
-		inet_pton(AF_INET6, temp3, &daddr.in6);
+	if (inet_pton(AF_INET6, cip, &caddr.in6) > 0) {
+		inet_pton(AF_INET6, vip, &vaddr.in6);
+		inet_pton(AF_INET6, lip, &laddr.in6);
+		inet_pton(AF_INET6, dip, &daddr.in6);
 		af = AF_INET6;
-	} else if (inet_pton(AF_INET, temp1, &caddr.ip) > 0) {
-		inet_pton(AF_INET, temp2, &vaddr.ip);
-		inet_pton(AF_INET, temp3, &daddr.ip);
+	} else if (inet_pton(AF_INET, cip, &caddr.ip) > 0) {
+		inet_pton(AF_INET, vip, &vaddr.ip);
+		inet_pton(AF_INET, lip, &laddr.ip);
+		inet_pton(AF_INET, dip, &daddr.ip);
 	} else {
-		caddr.ip = (__u32) htonl(strtoul(temp1, NULL, 16));
-		vaddr.ip = (__u32) htonl(strtoul(temp2, NULL, 16));
-		daddr.ip = (__u32) htonl(strtoul(temp3, NULL, 16));
+		caddr.ip = (__u32) htonl(strtoul(cip, NULL, 16));
+		vaddr.ip = (__u32) htonl(strtoul(vip, NULL, 16));
+		laddr.ip = (__u32) htonl(strtoul(lip, NULL, 16));
+		daddr.ip = (__u32) htonl(strtoul(dip, NULL, 16));
 	}
 
 	if (!(cname = addrport_to_anyname(af, &caddr, cport, proto, format)))
 		exit(1);
 	if (!(vname = addrport_to_anyname(af, &vaddr, vport, proto, format)))
+		exit(1);
+	if (!(lname = addrport_to_anyname(af, &laddr, lport, proto, format)))
 		exit(1);
 	if (!(dname = addrport_to_anyname(af, &daddr, dport, proto, format)))
 		exit(1);
@@ -1604,15 +1607,16 @@ static void print_conn(char *buf, unsigned int format)
 	sprintf(expire_str, "%02d:%02d", minutes, seconds);
 
 	if (format & FMT_PERSISTENTCONN && n == 11)
-		printf("%-3s %-6s %-11s %-18s %-18s %-16s %-18s %s\n",
-		       protocol, expire_str, state, cname, vname, dname,
+		printf("%-3s %-6s %-11s %-30s %-30s %-30s %-30s %-30s %s\n",
+		       protocol, expire_str, state, cname, vname, lname, dname,
 		       pe_name, pe_data);
 	else
-		printf("%-3s %-6s %-11s %-18s %-18s %s\n",
-		       protocol, expire_str, state, cname, vname, dname);
+		printf("%-3s %-6s %-11s %-30s %-30s %-30s %-30s\n",
+		       protocol, expire_str, state, cname, vname, lname, dname);
 
 	free(cname);
 	free(vname);
+	free(lname);
 	free(dname);
 }
 
@@ -1636,12 +1640,12 @@ void list_conn(unsigned int format)
 	}
 	printf("IPVS connection entries\n");
 	if (format & FMT_PERSISTENTCONN)
-		printf("pro expire %-11s %-18s %-18s %-18s %-16s %s\n",
-		       "state", "source", "virtual", "destination",
+		printf("pro expire %-11s %-30s %-30s %-30s %-30s %-30s %s\n",
+		       "state", "source", "virtual", "local", "destination",
 		       "pe name", "pe_data");
 	else
-		printf("pro expire %-11s %-18s %-18s %s\n",
-		       "state", "source", "virtual", "destination");
+		printf("pro expire %-11s %-30s %-30s %-30s %-30s\n",
+		       "state", "source", "virtual", "local", "destination");
 
 	/*
 	 * Print the VS information according to the format
