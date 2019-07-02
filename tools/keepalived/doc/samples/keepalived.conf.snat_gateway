@@ -1,0 +1,29 @@
+virtual_server fwmark 1 {
+    snat_rule {
+        from 192.168.40.0/24
+        oif eth2
+        snat_ip 1.1.3.252-1.1.3.254
+        algo random
+    }
+
+    snat_rule {
+        from 10.0.0.0/8
+        oif eth1
+        snat_ip 1.1.2.252-1.1.2.254
+        algo sdh
+    }
+
+    snat_rule {
+        from 10.0.0.0/8
+        to 1.1.0.0/16
+        snat_ip 1.1.2.252-1.1.2.254
+        algo sdh
+    }
+
+    snat_rule {
+        from 10.1.0.0/16
+        new_gw 1.1.2.1
+        snat_ip 1.1.2.252-1.1.2.254
+        algo sh
+    }
+}

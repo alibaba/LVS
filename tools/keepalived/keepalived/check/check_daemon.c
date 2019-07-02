@@ -107,10 +107,10 @@ start_check(void)
 		stop_check();
 		return;
 	}
-
 	/* Processing differential configuration parsing */
-	if (reload)
+	if (reload) {
 		clear_diff_services();
+	}
 
 	/* Initialize IPVS topology */
 	if (!init_services()) {
@@ -169,7 +169,6 @@ reload_check_thread(thread_t * thread)
 {
 	/* set the reloading flag */
 	SET_RELOAD;
-
 	/* Signals handling */
 	signal_reset();
 	signal_handler_destroy();

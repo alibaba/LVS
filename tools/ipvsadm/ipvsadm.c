@@ -141,7 +141,12 @@
 #define CMD_ADDLADDR		(CMD_NONE+15)
 #define CMD_DELLADDR		(CMD_NONE+16)
 #define CMD_GETLADDR		(CMD_NONE+17)
-#define CMD_MAX			CMD_GETLADDR
+/* for lvs snat */
+#define CMD_ADDSNAT  (CMD_NONE+18)
+#define CMD_DELSNAT  (CMD_NONE+19)
+#define CMD_EDITSNAT  (CMD_NONE+20)
+
+#define CMD_MAX  CMD_EDITSNAT
 #define NUMBER_OF_CMD		(CMD_MAX - CMD_NONE)
 
 static const char* cmdnames[] = {
@@ -162,6 +167,9 @@ static const char* cmdnames[] = {
 	"add-laddr" , 
 	"del-laddr" , 
 	"get-laddr" , 
+	"add-snat",
+	"del-snat",
+	"edit-snat",
 };
 
 static const char* optnames[] = {
@@ -169,7 +177,6 @@ static const char* optnames[] = {
 	"connection",
 	"service-address",
 	"scheduler",
-	"pe",
 	"persistent",
 	"netmask",
 	"real-server",
@@ -191,6 +198,13 @@ static const char* optnames[] = {
 	"pe" , 
 	"local-address" , 
 	"synproxy" , 
+	"source-address",
+	"dest-address",
+	"gateway",
+	"snat-ip",
+	"algo",
+	"new-gateway",
+	"oif",
 };
 
 /*
@@ -203,24 +217,28 @@ static const char* optnames[] = {
  */
 static const char commands_v_options[NUMBER_OF_CMD][NUMBER_OF_OPT] =
 {
-	/*   -n   -c   svc  -s   -p   -M   -r   fwd  -w   -x   -y   -mc  tot  dmn  -st  -rt  thr  -pc  srt  sid  -ex  ops  pe   laddr syn*/
-/*ADD*/     {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' '},
-/*EDIT*/    {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' '},
-/*DEL*/     {'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*FLUSH*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*LIST*/    {' ', '1', '1', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '1', '1', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x'},
-/*ADDSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*DELSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*EDITSRV*/ {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*TIMEOUT*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*STARTD*/  {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x'},
-/*STOPD*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x'},
-/*RESTORE*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*SAVE*/    {' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*ZERO*/    {'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
-/*ADDLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x'},
-/*DELLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x'},
-/*GETLADDR*/{'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'},
+/*   -n   -c   svc  -s   -p   -M   -r   fwd  -w   -x   -y   -mc  tot  dmn  -st  -rt  thr  -pc  srt  sid  -ex  ops  pe   laddr syn -F -T -W -U -O -N -oif */
+/*ADD*/     {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*EDIT*/    {'x', 'x', '+', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*DEL*/     {'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*FLUSH*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*LIST*/    {' ', '1', '1', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '1', '1', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*ADDSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*DELSRV*/  {'x', 'x', '+', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*EDITSRV*/ {'x', 'x', '+', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x',  'x', 'x', 'x', 'x','x', 'x'},
+/*TIMEOUT*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*STARTD*/  {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*STOPD*/   {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*RESTORE*/ {'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*SAVE*/    {' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*ZERO*/    {'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*ADDLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*DELLADDR*/{'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+/*GETLADDR*/{'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x','x', 'x'},
+
+/*ADDSNAT*/  {'x', 'x', '+', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', ' ', ' ', '+', ' ',' ', ' '},
+/*DELSNAT*/  {'x', 'x', '+', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', ' ', ' ', ' ', ' ',' ', ' '},
+/*EDITSNAT*/ {'x', 'x', '+', 'x', 'x', 'x', 'x', ' ', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', '+', ' ', ' ', '+', ' ',' ', ' '},
 };
 
 /* printing format flags */
@@ -233,13 +251,22 @@ static const char commands_v_options[NUMBER_OF_CMD][NUMBER_OF_OPT] =
 #define FMT_PERSISTENTCONN	0x0020
 #define FMT_NOSORT		0x0040
 #define FMT_EXACT		0x0080
+#define FMT_SNAT_RULE		0x0100
 
 #define SERVICE_NONE		0x0000
 #define SERVICE_ADDR		0x0001
 #define SERVICE_PORT		0x0002
 
+#define SNAT_NONE		0x0000
+#define SNAT_ADDR		0x0001
+#define SNAT_MASK		0x0002
+
 /* default scheduler */
 #define DEF_SCHED		"wlc"
+
+/* default snat src gateway */
+#define DEF_SNAT_SRC_GW  0 /* all isp */
+#define DEF_SANT_NEW_GW 0
 
 /* default multicast interface name */
 #define DEF_MCAST_IFN		"eth0"
@@ -250,9 +277,17 @@ struct ipvs_command_entry {
 	int			cmd;
 	ipvs_service_t		svc;
 	ipvs_dest_t		dest;
+	ipvs_snat_dest_t	snat_dest;
 	ipvs_timeout_t		timeout;
 	ipvs_daemon_t		daemon;
 	ipvs_laddr_t		laddr;
+};
+
+ /* common use */
+struct ipvs_snat_rule_parse {
+	union nf_inet_addr addr;
+	int mask;
+	u_int16_t af;
 };
 
 /* Use values outside ASCII range so that if an option has
@@ -272,6 +307,7 @@ enum {
 	TAG_SORT,
 	TAG_NO_SORT,
 	TAG_PERSISTENCE_ENGINE,
+	TAG_OUT_DEV,
 };
 
 /* various parsing helpers & parsing functions */
@@ -289,11 +325,11 @@ static int parse_service(char *buf, ipvs_service_t *svc);
 static int parse_netmask(char *buf, u_int32_t *addr);
 static int parse_timeout(char *buf, int min, int max);
 static unsigned int parse_fwmark(char *buf);
-
+static int parse_address_mask(char* buf, struct ipvs_snat_rule_parse *rule);
 /* check the options based on the commands_v_options table */
-static void generic_opt_check(int command, int options);
+static void generic_opt_check(int command, unsigned long options);
 static void set_command(int *cmd, const int newcmd);
-static void set_option(unsigned int *options, unsigned int option);
+static void set_option(unsigned long *options, unsigned long option);
 
 static void tryhelp_exit(const char *program, const int exit_status);
 static void usage_exit(const char *program, const int exit_status);
@@ -313,6 +349,11 @@ static int list_all_laddrs(void);
 static int modprobe_ipvs(void);
 static void check_ipvs_version(void);
 static int process_options(int argc, char **argv, int reading_stdin);
+
+static void addrmask_to_str(int af, const union nf_inet_addr * addr, unsigned short mask, char * output);
+static void addrpool_to_str(int af, const union nf_inet_addr * minaddr, const union nf_inet_addr * maxaddr, char * output);
+static void addr_to_str(int af, const union nf_inet_addr * addr, char * output);
+static inline char* ip_select_algo_name(unsigned algo);
 
 
 int main(int argc, char **argv)
@@ -348,7 +389,7 @@ int main(int argc, char **argv)
 
 static int
 parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
-	      unsigned int *options, unsigned int *format)
+	      unsigned long *options, unsigned int *format)
 {
 	int c, parse;
 	poptContext context;
@@ -369,66 +410,60 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 		{ "version", 'v', POPT_ARG_NONE, NULL, 'v', NULL, NULL },
 		{ "restore", 'R', POPT_ARG_NONE, NULL, 'R', NULL, NULL },
 		{ "save", 'S', POPT_ARG_NONE, NULL, 'S', NULL, NULL },
-		{ "start-daemon", '\0', POPT_ARG_STRING, &optarg,
-		  TAG_START_DAEMON, NULL, NULL },
-		{ "stop-daemon", '\0', POPT_ARG_STRING, &optarg,
-		  TAG_STOP_DAEMON, NULL, NULL },
+		{ "start-daemon", '\0', POPT_ARG_STRING, &optarg, TAG_START_DAEMON, NULL, NULL },
+		{ "stop-daemon", '\0', POPT_ARG_STRING, &optarg, TAG_STOP_DAEMON, NULL, NULL },
 		{ "add-laddr", 'P', POPT_ARG_NONE, NULL, 'P', NULL, NULL },
 		{ "del-laddr", 'Q', POPT_ARG_NONE, NULL, 'Q', NULL, NULL },
 		{ "get-laddr", 'G', POPT_ARG_NONE, NULL, 'G', NULL, NULL },
-
-		{ "tcp-service", 't', POPT_ARG_STRING, &optarg, 't',
-		  NULL, NULL },
-		{ "udp-service", 'u', POPT_ARG_STRING, &optarg, 'u',
-		  NULL, NULL },
-		{ "fwmark-service", 'f', POPT_ARG_STRING, &optarg, 'f',
-		  NULL, NULL },
+		{ "tcp-service", 't', POPT_ARG_STRING, &optarg, 't', NULL, NULL },
+		{ "udp-service", 'u', POPT_ARG_STRING, &optarg, 'u', NULL, NULL },
+		{ "fwmark-service", 'f', POPT_ARG_STRING, &optarg, 'f', NULL, NULL },
 		{ "scheduler", 's', POPT_ARG_STRING, &optarg, 's', NULL, NULL },
-		{ "persistent", 'p', POPT_ARG_STRING|POPT_ARGFLAG_OPTIONAL,
-		 &optarg, 'p', NULL, NULL },
+		{ "persistent", 'p', POPT_ARG_STRING|POPT_ARGFLAG_OPTIONAL,&optarg, 'p', NULL, NULL },
 		{ "netmask", 'M', POPT_ARG_STRING, &optarg, 'M', NULL, NULL },
-		{ "real-server", 'r', POPT_ARG_STRING, &optarg, 'r',
-		  NULL, NULL },
+		{ "real-server", 'r', POPT_ARG_STRING, &optarg, 'r', NULL, NULL },
 		{ "masquerading", 'm', POPT_ARG_NONE, NULL, 'm', NULL, NULL },
 		{ "ipip", 'i', POPT_ARG_NONE, NULL, 'i', NULL, NULL },
 		{ "gatewaying", 'g', POPT_ARG_NONE, NULL, 'g', NULL, NULL },
 		{ "fullnat" , 'b' , POPT_ARG_NONE, NULL, 'b', NULL, NULL },
 		{ "weight", 'w', POPT_ARG_STRING, &optarg, 'w', NULL, NULL },
-		{ "u-threshold", 'x', POPT_ARG_STRING, &optarg, 'x',
-		  NULL, NULL },
-		{ "l-threshold", 'y', POPT_ARG_STRING, &optarg, 'y',
-		  NULL, NULL },
+		{ "u-threshold", 'x', POPT_ARG_STRING, &optarg, 'x', NULL, NULL },
+		{ "l-threshold", 'y', POPT_ARG_STRING, &optarg, 'y', NULL, NULL },
 		{ "numeric", 'n', POPT_ARG_NONE, NULL, 'n', NULL, NULL },
 		{ "connection", 'c', POPT_ARG_NONE, NULL, 'c', NULL, NULL },
-		{ "mcast-interface", '\0', POPT_ARG_STRING, &optarg,
-		  TAG_MCAST_INTERFACE, NULL, NULL },
+		{ "mcast-interface", '\0', POPT_ARG_STRING, &optarg, TAG_MCAST_INTERFACE, NULL, NULL },
 		{ "syncid", '\0', POPT_ARG_STRING, &optarg, 'I', NULL, NULL },
-		{ "timeout", '\0', POPT_ARG_NONE, NULL, TAG_TIMEOUT,
-		  NULL, NULL },
+		{ "timeout", '\0', POPT_ARG_NONE, NULL, TAG_TIMEOUT, NULL, NULL },
 		{ "daemon", '\0', POPT_ARG_NONE, NULL, TAG_DAEMON, NULL, NULL },
 		{ "stats", '\0', POPT_ARG_NONE, NULL, TAG_STATS, NULL, NULL },
 		{ "rate", '\0', POPT_ARG_NONE, NULL, TAG_RATE, NULL, NULL },
-		{ "thresholds", '\0', POPT_ARG_NONE, NULL,
-		   TAG_THRESHOLDS, NULL, NULL },
-		{ "persistent-conn", '\0', POPT_ARG_NONE, NULL,
-		  TAG_PERSISTENTCONN, NULL, NULL },
-		{ "nosort", '\0', POPT_ARG_NONE, NULL,
-		   TAG_NO_SORT, NULL, NULL },
+		{ "thresholds", '\0', POPT_ARG_NONE, NULL,TAG_THRESHOLDS, NULL, NULL },
+		{ "persistent-conn", '\0', POPT_ARG_NONE, NULL, TAG_PERSISTENTCONN, NULL, NULL },
+		{ "nosort", '\0', POPT_ARG_NONE, NULL, TAG_NO_SORT, NULL, NULL },
 		{ "sort", '\0', POPT_ARG_NONE, NULL, TAG_SORT, NULL, NULL },
 		{ "exact", 'X', POPT_ARG_NONE, NULL, 'X', NULL, NULL },
 		{ "ipv6", '6', POPT_ARG_NONE, NULL, '6', NULL, NULL },
 		{ "ops", 'o', POPT_ARG_NONE, NULL, 'o', NULL, NULL },
-		{ "pe", '\0', POPT_ARG_STRING, &optarg, TAG_PERSISTENCE_ENGINE,
-		  NULL, NULL },
+		{ "pe", '\0', POPT_ARG_STRING, &optarg, TAG_PERSISTENCE_ENGINE, NULL, NULL },
 		{ "laddr", 'z', POPT_ARG_STRING, &optarg, 'z', NULL, NULL },
 		{ "synproxy", 'j' , POPT_ARG_STRING, &optarg, 'j', NULL, NULL },
+		{ "add-snat", 'K', POPT_ARG_NONE, NULL, 'K', NULL, NULL},
+		{ "edit-snat", 'k', POPT_ARG_NONE, NULL, 'k', NULL, NULL},
+		{ "delete-snat", 'H', POPT_ARG_NONE, NULL, 'H', NULL, NULL},
+		{ "from", 'F', POPT_ARG_STRING, &optarg, 'F', NULL, NULL }, /* --from */
+		{ "to", 'T', POPT_ARG_STRING, &optarg, 'T', NULL, NULL }, /* --to */
+		{ "gw", 'W', POPT_ARG_STRING, &optarg, 'W', NULL, NULL }, /* --gw */
+		{ "snat-ip", 'U', POPT_ARG_STRING, &optarg, 'U', NULL, NULL }, /* --source */
+		{ "algo", 'O', POPT_ARG_STRING, &optarg, 'O', NULL, NULL }, /* --algo */
+		{ "new-gw", 'N', POPT_ARG_STRING, &optarg, 'N', NULL, NULL }, /* --new_gw */
+		{ "oif", '\0', POPT_ARG_STRING, &optarg, TAG_OUT_DEV, NULL, NULL},  /* --oif */
 		{ NULL, 0, 0, NULL, 0, NULL, NULL }
 	};
 
 	context = poptGetContext("ipvsadm", argc, (const char **)argv,
 				 options_table, 0);
-
-	if ((c = poptGetNextOpt(context)) < 0)
+	    c = poptGetNextOpt(context);
+	if (c < 0)
 		tryhelp_exit(argv[0], -1);
 
 	switch (c) {
@@ -500,6 +535,15 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 	case 'G':
 		set_command(&ce->cmd, CMD_GETLADDR);
 		break;
+	case 'K':
+	    set_command(&ce->cmd, CMD_ADDSNAT);
+	    break;
+	case 'k':
+	    set_command(&ce->cmd, CMD_EDITSNAT);
+	    break;
+	case 'H':
+	    set_command(&ce->cmd, CMD_DELSNAT);
+	    break;
 	default:
 		tryhelp_exit(argv[0], -1);
 	}
@@ -511,10 +555,10 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 			set_option(options, OPT_SERVICE);
 			ce->svc.protocol =
 				(c=='t' ? IPPROTO_TCP : IPPROTO_UDP);
+		        /* get vip, port info after -t/-u options */
 			parse = parse_service(optarg, &ce->svc);
 			if (!(parse & SERVICE_ADDR))
-				fail(2, "illegal virtual server "
-				     "address[:port] specified");
+				fail(2, "illegal virtual server address[:port] specified");
 			break;
 		case 'f':
 			set_option(options, OPT_SERVICE);
@@ -525,25 +569,25 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 			ce->svc.af = AF_INET;
 			ce->svc.protocol = IPPROTO_TCP;
 			ce->svc.fwmark = parse_fwmark(optarg);
+			if (ce->svc.fwmark == 1) {
+			    *format |= FMT_SNAT_RULE;
+			}
 			break;
 		case 's':
 			set_option(options, OPT_SCHEDULER);
-			strncpy(ce->svc.sched_name,
-				optarg, IP_VS_SCHEDNAME_MAXLEN);
+			strncpy(ce->svc.sched_name, optarg, IP_VS_SCHEDNAME_MAXLEN);
 			break;
 		case 'p':
 			set_option(options, OPT_PERSISTENT);
 			ce->svc.flags |= IP_VS_SVC_F_PERSISTENT;
-			ce->svc.timeout =
-				parse_timeout(optarg, 1, MAX_TIMEOUT);
+			ce->svc.timeout = parse_timeout(optarg, 1, MAX_TIMEOUT);
 			break;
 		case 'M':
 			set_option(options, OPT_NETMASK);
 			if (ce->svc.af != AF_INET6) {
 				parse = parse_netmask(optarg, &ce->svc.netmask);
 				if (parse != 1)
-					fail(2, "illegal virtual server "
-					     "persistent mask specified");
+					fail(2, "illegal virtual server persistent mask specified");
 			} else {
 				ce->svc.netmask = atoi(optarg);
 				if ((ce->svc.netmask < 1) || (ce->svc.netmask > 128))
@@ -557,9 +601,9 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 			ce->dest.af = t_dest.af;
 			ce->dest.addr = t_dest.addr;
 			ce->dest.port = t_dest.port;
-			if (!(parse & SERVICE_ADDR))
-				fail(2, "illegal real server "
-				     "address[:port] specified");
+			if (!(parse & SERVICE_ADDR)) {
+				fail (2, "illegal real server ddress[:port] specified");
+			}
 			/* copy vport to dport if not specified */
 			if (parse == 1)
 				ce->dest.port = ce->svc.port;
@@ -567,18 +611,22 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 		case 'i':
 			set_option(options, OPT_FORWARD);
 			ce->dest.conn_flags = IP_VS_CONN_F_TUNNEL;
+			ce->snat_dest.conn_flags = ce->dest.conn_flags;
 			break;
 		case 'g':
 			set_option(options, OPT_FORWARD);
 			ce->dest.conn_flags = IP_VS_CONN_F_DROUTE;
+			ce->snat_dest.conn_flags = ce->dest.conn_flags;
 			break;
 		case 'b':
 			set_option(options, OPT_FORWARD);
 			ce->dest.conn_flags = IP_VS_CONN_F_FULLNAT;
+			ce->snat_dest.conn_flags = ce->dest.conn_flags;
 			break;
 		case 'm':
 			set_option(options, OPT_FORWARD);
 			ce->dest.conn_flags = IP_VS_CONN_F_MASQ;
+			ce->snat_dest.conn_flags = ce->dest.conn_flags;
 			break;
 		case 'w':
 			set_option(options, OPT_WEIGHT);
@@ -607,8 +655,7 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 			break;
 		case TAG_MCAST_INTERFACE:
 			set_option(options, OPT_MCAST);
-			strncpy(ce->daemon.mcast_ifn,
-				optarg, IP_VS_IFNAME_MAXLEN);
+			strncpy(ce->daemon.mcast_ifn, optarg, IP_VS_IFNAME_MAXLEN);
 			break;
 		case 'I':
 			set_option(options, OPT_SYNCID);
@@ -692,6 +739,137 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 
 			break;
 			}
+		case 'F':
+		{
+			struct ipvs_snat_rule_parse rule;
+			set_option(options, OPT_SNAT_FROM);
+			parse = parse_address_mask(optarg, &rule);
+			if (!parse & SNAT_ADDR) {
+				fail(2, "illegal from address");
+			}
+			ce->snat_dest.saddr = rule.addr;
+			if (parse & SNAT_MASK) {
+				ce->snat_dest.smask = rule.mask;
+			}
+			ce->snat_dest.af = rule.af;
+			break;
+		}
+		case 'T':
+		{
+			/* rule from address and mask */
+			struct ipvs_snat_rule_parse rule;
+			set_option(options, OPT_SNAT_TO);
+			parse = parse_address_mask(optarg, &rule);
+			if (!parse & SNAT_ADDR) {
+				fail(2, "illegal dest address");
+			}
+			ce->snat_dest.daddr = rule.addr;
+			if (ce->snat_dest.af != rule.af) {
+				fail(2, "Address family not consistent");
+			}
+			if (parse & SNAT_MASK) {
+				ce->snat_dest.dmask = rule.mask;
+			}
+			break;
+		}
+		case 'W':
+		{
+			struct ipvs_snat_rule_parse rule;
+			set_option(options, OPT_SNAT_GW);
+			parse = parse_address_mask(optarg, &rule);
+			if (!parse & SNAT_ADDR) {
+				fail(2, "illegal orign gateway address");
+			}
+			ce->snat_dest.gw = rule.addr;
+			if (ce->snat_dest.af != rule.af) {
+				fail(2, "Address family not consistent");
+			}
+			break;
+		}
+		case 'U':
+		{
+			struct ipvs_snat_rule_parse rule;
+			set_option(options, OPT_SNAT_SOURCE);
+			if (optarg) {
+				char *portp = NULL;
+				portp = strchr(optarg, '-');
+				if (portp == NULL) {
+					parse = parse_address_mask(optarg, &rule);
+					if (!parse & SNAT_ADDR) {
+						fail(2, "illegal snatip address");
+					}
+					if (ce->snat_dest.af != rule.af) {
+						fail(2, "Address family not consistent");
+					}
+					ce->snat_dest.min_ip = rule.addr;
+					ce->snat_dest.max_ip = ce->snat_dest.min_ip;
+				} else {
+					*portp = '\0';
+					portp++;
+					parse = parse_address_mask(optarg, &rule);
+					if (!parse & SNAT_ADDR) {
+						fail(2, "illegal min ip address");
+					}
+					if (ce->snat_dest.af != rule.af) {
+						fail(2, "Address family not consistent");
+					}
+					ce->snat_dest.min_ip = rule.addr;
+					parse = parse_address_mask(portp, &rule);
+					if (!parse & SNAT_ADDR) {
+						fail(2, "illegal max ip address");
+					}
+					if (ce->snat_dest.af != rule.af) {
+						fail(2, "Address family not consistent");
+					}
+					ce->snat_dest.max_ip = rule.addr;
+					if (ce->snat_dest.af == AF_INET) {
+						if (ce->snat_dest.max_ip.ip < ce->snat_dest.min_ip.ip) {
+							fail(2, "illegal snat source address:max ip smaller than min ip");
+						}
+					}
+				}
+			}
+			break;
+		}
+		case 'O':
+		{
+			set_option(options, OPT_SNAT_ALGO);
+			if (!memcmp(optarg , "sh" , strlen("sh"))) {
+				ce->snat_dest.algo = IPVS_SNAT_IPS_PERSITENT;
+			} else if(!memcmp(optarg , "sdh" , strlen("sdh"))) {
+				ce->snat_dest.algo = IPVS_SNAT_IPS_NORMAL;
+			} else if (!memcmp(optarg, "random", strlen("random"))) {
+				ce->snat_dest.algo = IPVS_SNAT_IPS_RANDOM;
+			} else {
+				fail(2 , "unkown ip select algo, shoule be one of [sh, sdh, ramdom]\n");
+			}
+			break;
+		}
+		case 'N':
+		{
+			struct ipvs_snat_rule_parse rule;
+			set_option(options, OPT_SNAT_NEWGW);
+			parse = parse_address_mask(optarg, &rule);
+			if (!parse & SNAT_ADDR) {
+				fail(2, "illegal new next gateway address");
+			}
+			if (ce->snat_dest.af != rule.af) {
+				fail(2, "Address family not consistent");
+			}
+			ce->snat_dest.new_gw = rule.addr;
+			break;
+		}
+		case TAG_OUT_DEV:
+		{
+			set_option(options, OPT_SNAT_OUTDEV);
+			if (optarg) {
+				if (strlen(optarg) >= IP_VS_IFNAME_MAXLEN) {
+				fail(2, "snat out device name too long");
+			}
+				strncpy(ce->snat_dest.out_dev, optarg, IP_VS_IFNAME_MAXLEN);
+			}
+		}
+			break;
 		default:
 			fail(2, "invalid option `%s'",
 			     poptBadOption(context, POPT_BADOPTION_NOALIAS));
@@ -732,7 +910,6 @@ parse_options(int argc, char **argv, struct ipvs_command_entry *ce,
 }
 
 
-
 static int restore_table(int argc, char **argv, int reading_stdin)
 {
 	int result = 0;
@@ -756,7 +933,7 @@ static int restore_table(int argc, char **argv, int reading_stdin)
 static int process_options(int argc, char **argv, int reading_stdin)
 {
 	struct ipvs_command_entry ce;
-	unsigned int options = OPT_NONE;
+	unsigned long options = OPT_NONE;
 	unsigned int format = FMT_NONE;
 	int result = 0;
 
@@ -769,8 +946,13 @@ static int process_options(int argc, char **argv, int reading_stdin)
 	/* Set the default persistent granularity to /32 mask */
 	ce.svc.netmask = ((u_int32_t) 0xffffffff);
 
-	if (parse_options(argc, argv, &ce, &options, &format))
+	/* lvs snat default value */
+	ce.snat_dest.algo = IPVS_SNAT_IPS_NORMAL;
+	ce.snat_dest.conn_flags = IP_VS_CONN_F_FULLNAT;
+
+	if (parse_options(argc, argv, &ce, &options, &format)) {
 		return -1;
+	}
 
 	generic_opt_check(ce.cmd, options);
 
@@ -778,8 +960,7 @@ static int process_options(int argc, char **argv, int reading_stdin)
 		/* Make sure that port zero service is persistent */
 		if (!ce.svc.fwmark && !ce.svc.port &&
 		    !(ce.svc.flags & IP_VS_SVC_F_PERSISTENT))
-			fail(2, "Zero port specified "
-			     "for non-persistent service");
+			fail(2, "Zero port specified for non-persistent service");
 
 		if (ce.svc.flags & IP_VS_SVC_F_ONEPACKET &&
 		    !ce.svc.fwmark && ce.svc.protocol != IPPROTO_UDP)
@@ -866,6 +1047,16 @@ static int process_options(int argc, char **argv, int reading_stdin)
 		result = ipvs_del_dest(&ce.svc, &ce.dest);
 		break;
 
+	case CMD_ADDSNAT:
+		result = ipvs_add_snat_dest(&ce.svc, &ce.snat_dest);
+		break;
+	case CMD_EDITSNAT:
+		result = ipvs_update_snat_dest(&ce.svc, &ce.snat_dest);
+		break;
+	case CMD_DELSNAT:
+		result = ipvs_del_snat_dest(&ce.svc, &ce.snat_dest);
+		break;
+            
 	case CMD_TIMEOUT:
 		result = ipvs_set_timeout(&ce.timeout);
 		break;
@@ -975,6 +1166,67 @@ static int parse_netmask(char *buf, u_int32_t *addr)
 	return 1;
 }
 
+/* 
+ * Get source ip and mask from the argument
+ */
+static int parse_address_mask(char* buf,  struct ipvs_snat_rule_parse *rule)
+{
+	char *portp = NULL;
+	long portn;
+	int result=SNAT_NONE;
+	struct in_addr inaddr;
+	struct in6_addr inaddr6;
+
+	if (buf == NULL || str_is_digit(buf))
+		return SNAT_NONE;
+		
+	if (buf[0] == '[') {
+		buf++;
+		portp = strchr(buf, ']');
+		if (portp == NULL) {
+			return SNAT_NONE;
+		}
+		*portp = '\0';
+		portp++;
+		if (*portp == '/') {
+			*portp = '\0';
+		}  else {
+			return SNAT_NONE;
+		}
+	}
+
+	if (inet_pton(AF_INET6, buf, &inaddr6) > 0) {
+		rule->addr.in6 = inaddr6;
+		rule->mask = 128;
+		rule->af = AF_INET6;
+		fail(2, "Not support IPv6");
+	} else {
+		portp = strrchr(buf, '/');
+		if (portp != NULL) {
+			*portp = '\0';
+		}
+		rule->af = AF_INET;
+		if (inet_aton(buf, &inaddr) != 0) {
+			rule->addr.ip = inaddr.s_addr;
+		} else if (host_to_addr(buf, &inaddr) != -1) {
+			rule->addr.ip = inaddr.s_addr;
+		} else {
+			return SNAT_NONE;
+		}
+	}
+
+	result |= SNAT_ADDR;
+	if (portp != NULL) {
+		result |= SNAT_MASK;
+		if ((portn = string_to_number(portp+1, 0, 32)) != -1) {
+			rule->mask= portn;
+		} else {
+			return SNAT_NONE;
+		}
+	}
+
+	return result;
+}
 
 /*
  * Get IP address and port from the argument.
@@ -1043,33 +1295,30 @@ parse_service(char *buf, ipvs_service_t *svc)
 
 
 static void
-generic_opt_check(int command, int options)
+generic_opt_check(int command, unsigned long options)
 {
 	int i, j;
 	int last = 0, count = 0;
 
 	/* Check that commands are valid with options. */
 	i = command - CMD_NONE -1;
-
 	for (j = 0; j < NUMBER_OF_OPT; j++) {
 		if (!(options & (1<<j))) {
-			if (commands_v_options[i][j] == '+')
-				fail(2, "You need to supply the '%s' "
-				     "option for the '%s' command",
-				     optnames[j], cmdnames[i]);
+			if (commands_v_options[i][j] == '+') {
+				fail(2, "You need to supply the '%s' option for the '%s' command",  optnames[j], cmdnames[i]);
+			}
 		} else {
-			if (commands_v_options[i][j] == 'x')
-				fail(2, "Illegal '%s' option with "
-				     "the '%s' command",
-				     optnames[j], cmdnames[i]);
+			if (commands_v_options[i][j] == 'x') {
+				fail(2, "Illegal '%s' option with the '%s' command", optnames[j], cmdnames[i]);
+			}
 			if (commands_v_options[i][j] == '1') {
 				count++;
 				if (count == 1) {
 					last = j;
 					continue;
 				}
-				fail(2, "The option '%s' conflicts with the "
-				     "'%s' option in the '%s' command",
+
+				fail(2, "The option '%s' conflicts with '%s' option in the '%s' command",  
 				     optnames[j], optnames[last], cmdnames[i]);
 			}
 		}
@@ -1077,7 +1326,7 @@ generic_opt_check(int command, int options)
 }
 
 static inline const char *
-opt2name(int option)
+opt2name(unsigned long option)
 {
 	const char **ptr;
 	for (ptr = optnames; option > 1; option >>= 1, ptr++);
@@ -1094,7 +1343,7 @@ set_command(int *cmd, const int newcmd)
 }
 
 static void
-set_option(unsigned int *options, unsigned int option)
+set_option(unsigned long *options, unsigned long option)
 {
 	if (*options & option)
 		fail(2, "multiple '%s' options specified", opt2name(option));
@@ -1136,11 +1385,13 @@ static void usage_exit(const char *program, const int exit_status)
 		"  %s --set tcp tcpfin udp\n"
 		"  %s --start-daemon state [--mcast-interface interface] [--syncid sid]\n"
 		"  %s --stop-daemon state\n"
+		"  %s -K|k -f service-address -F src-addrress/mask [-T dest-address/mask] [-W gw] -U minip-maxip [-O algo] [--oif dev] [-N new-gw] [-b]\n"
+		"  %s -H -f service-address -F src-address/mask [-T dest-address/mask] [-W gw] [-U minip-maxip] [-O algo] [--oif dev] [-N new-gw] [-b]\n"
 		"  %s -h\n\n",
 		program, program, program,
 		program, program, 
 		program, program, program, program, program,
-		program, program, program, program, program);
+		program, program, program, program, program, program, program);
 
 	fprintf(stream,
 		"Commands:\n"
@@ -1162,6 +1413,9 @@ static void usage_exit(const char *program, const int exit_status)
 		"  --set tcp tcpfin udp        set connection timeout values\n"
 		"  --start-daemon              start connection sync daemon\n"
 		"  --stop-daemon               stop connection sync daemon\n"
+		"  --add-snat        -K        add lvs snat rule\n"
+		"  --edit-snat       -k        edit lvs snat rule\n"
+		"  --delete-snat     -H        delete lvs snat rule\n"
 		"  --help            -h        display this help message\n\n"
 		);
 
@@ -1198,7 +1452,14 @@ static void usage_exit(const char *program, const int exit_status)
 		"  --nosort                            disable sorting output of service/server entries\n"
 		"  --sort                              does nothing, for backwards compatibility\n"
 		"  --ops          -o                   one-packet scheduling\n"
-		"  --numeric      -n                   numeric output of addresses and ports\n",
+		"  --numeric      -n                   numeric output of addresses and ports\n"
+		"  --from         -F                   lvs snat rule source address/mask\n"
+		"  --to           -T                   lvs snat rule dest address/mask\n"
+		"  --gw           -W                   lvs snat rule orign gateway\n"
+		"  --snat-ip      -U                   lvs snat rule snat ip pool\n"
+		"  --algo         -O                   lvs snat rule source ip choice algo, must be one of (sh, sdh, random), default sdh\n"
+		"  --new-gw       -N                   lvs snat rule new next gateway\n"
+		"  --oif                               lvs snat output dev\n",
 		DEF_SCHED);
 
 	exit(exit_status);
@@ -1285,29 +1546,27 @@ static void check_ipvs_version(void)
 
 static void print_conn(char *buf, unsigned int format)
 {
-	char            protocol[8];
-	unsigned short  proto;
-	union nf_inet_addr  caddr;
-	unsigned short  cport;
-	union nf_inet_addr  vaddr;
-	unsigned short  vport;
-	union nf_inet_addr  daddr;
-	unsigned short  dport;
-	char            state[16];
-	unsigned int    expires;
+	int n;
+	char protocol[8];
+	char state[16];
+	char expire_str[12];
 	unsigned short  af = AF_INET;
+	unsigned int    expires;
+	unsigned int	minutes, seconds;
+	unsigned short  proto;
+	unsigned short  cport, vport, lport, dport;
+	union nf_inet_addr  caddr;
+	union nf_inet_addr  vaddr;
+	union nf_inet_addr  laddr;
+	union nf_inet_addr  daddr;
 	char		pe_name[IP_VS_PENAME_MAXLEN];
 	char		pe_data[IP_VS_PEDATA_MAXLEN];
+	char cip[INET6_ADDRSTRLEN], vip[INET6_ADDRSTRLEN], lip[INET6_ADDRSTRLEN], dip[INET6_ADDRSTRLEN];
+	char *cname, *vname, *lname, *dname;
 
-	int n;
-	char temp1[INET6_ADDRSTRLEN], temp2[INET6_ADDRSTRLEN], temp3[INET6_ADDRSTRLEN];
-	char *cname, *vname, *dname;
-	unsigned int	minutes, seconds;
-	char		expire_str[12];
-
-	if ((n = sscanf(buf, "%s %s %hX %s %hX %s %hX %s %d %s %s",
-			protocol, temp1, &cport, temp2, &vport,
-			temp3, &dport, state, &expires,
+	if ((n = sscanf(buf, "%s %s %hX %s %hX %s %hX %s %hX %s %d %s %s",
+			protocol, cip, &cport, vip, &vport, lip, &lport,
+			dip, &dport, state, &expires,
 			pe_name, pe_data)) == -1)
 		exit(1);
 
@@ -1318,22 +1577,27 @@ static void print_conn(char *buf, unsigned int format)
 	else
 		proto = 0;
 
-	if (inet_pton(AF_INET6, temp1, &caddr.in6) > 0) {
-		inet_pton(AF_INET6, temp2, &vaddr.in6);
-		inet_pton(AF_INET6, temp3, &daddr.in6);
+	if (inet_pton(AF_INET6, cip, &caddr.in6) > 0) {
+		inet_pton(AF_INET6, vip, &vaddr.in6);
+		inet_pton(AF_INET6, lip, &laddr.in6);
+		inet_pton(AF_INET6, dip, &daddr.in6);
 		af = AF_INET6;
-	} else if (inet_pton(AF_INET, temp1, &caddr.ip) > 0) {
-		inet_pton(AF_INET, temp2, &vaddr.ip);
-		inet_pton(AF_INET, temp3, &daddr.ip);
+	} else if (inet_pton(AF_INET, cip, &caddr.ip) > 0) {
+		inet_pton(AF_INET, vip, &vaddr.ip);
+		inet_pton(AF_INET, lip, &laddr.ip);
+		inet_pton(AF_INET, dip, &daddr.ip);
 	} else {
-		caddr.ip = (__u32) htonl(strtoul(temp1, NULL, 16));
-		vaddr.ip = (__u32) htonl(strtoul(temp2, NULL, 16));
-		daddr.ip = (__u32) htonl(strtoul(temp3, NULL, 16));
+		caddr.ip = (__u32) htonl(strtoul(cip, NULL, 16));
+		vaddr.ip = (__u32) htonl(strtoul(vip, NULL, 16));
+		laddr.ip = (__u32) htonl(strtoul(lip, NULL, 16));
+		daddr.ip = (__u32) htonl(strtoul(dip, NULL, 16));
 	}
 
 	if (!(cname = addrport_to_anyname(af, &caddr, cport, proto, format)))
 		exit(1);
 	if (!(vname = addrport_to_anyname(af, &vaddr, vport, proto, format)))
+		exit(1);
+	if (!(lname = addrport_to_anyname(af, &laddr, lport, proto, format)))
 		exit(1);
 	if (!(dname = addrport_to_anyname(af, &daddr, dport, proto, format)))
 		exit(1);
@@ -1343,15 +1607,16 @@ static void print_conn(char *buf, unsigned int format)
 	sprintf(expire_str, "%02d:%02d", minutes, seconds);
 
 	if (format & FMT_PERSISTENTCONN && n == 11)
-		printf("%-3s %-6s %-11s %-18s %-18s %-16s %-18s %s\n",
-		       protocol, expire_str, state, cname, vname, dname,
+		printf("%-3s %-6s %-11s %-30s %-30s %-30s %-30s %-30s %s\n",
+		       protocol, expire_str, state, cname, vname, lname, dname,
 		       pe_name, pe_data);
 	else
-		printf("%-3s %-6s %-11s %-18s %-18s %s\n",
-		       protocol, expire_str, state, cname, vname, dname);
+		printf("%-3s %-6s %-11s %-30s %-30s %-30s %-30s\n",
+		       protocol, expire_str, state, cname, vname, lname, dname);
 
 	free(cname);
 	free(vname);
+	free(lname);
 	free(dname);
 }
 
@@ -1375,12 +1640,12 @@ void list_conn(unsigned int format)
 	}
 	printf("IPVS connection entries\n");
 	if (format & FMT_PERSISTENTCONN)
-		printf("pro expire %-11s %-18s %-18s %-18s %-16s %s\n",
-		       "state", "source", "virtual", "destination",
+		printf("pro expire %-11s %-30s %-30s %-30s %-30s %-30s %s\n",
+		       "state", "source", "virtual", "local", "destination",
 		       "pe name", "pe_data");
 	else
-		printf("pro expire %-11s %-18s %-18s %s\n",
-		       "state", "source", "virtual", "destination");
+		printf("pro expire %-11s %-30s %-30s %-30s %-30s\n",
+		       "state", "source", "virtual", "local", "destination");
 
 	/*
 	 * Print the VS information according to the format
@@ -1481,6 +1746,11 @@ static void print_title(unsigned int format)
 		       "  -> RemoteAddress:Port\n",
 		       "Prot LocalAddress:Port",
 		       "Weight", "PersistConn", "ActiveConn", "InActConn");
+		else if (format & FMT_SNAT_RULE) {
+			printf("Prot LocalAddress:Port Scheduler Flags\n"
+			"  -> %-20s%-20s%-17s%-16s%-32s%-8s%-17s%-10s%-10s\n",  
+			"SourceAddr", "DestAddr", "GW", "Oif", "SnatIp", "Algo", "NewGW", "ActConn", "InActConn");
+		}
 	else if (!(format & FMT_RULE))
 		printf("Prot LocalAddress:Port Scheduler Flags\n"
 		       "  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn\n");
@@ -1594,7 +1864,6 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 	for (i = 0; i < d->num_dests; i++) {
 		char *dname;
 		ipvs_dest_entry_t *e = &d->entrytable[i];
-
 		if (!(dname = addrport_to_anyname(se->af, &(e->addr), ntohs(e->port),
 						  se->protocol, format))) {
 			fprintf(stderr, "addrport_to_anyname fails\n");
@@ -1604,8 +1873,29 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 			dname[28] = '\0';
 
 		if (format & FMT_RULE) {
-			printf("-a %s -r %s %s -w %d\n", svc_name, dname,
-			       fwd_switch(e->conn_flags), e->weight);
+			if (se->fwmark == 1) {
+				char tmp_rule[512] = {0};
+				char src_net[128] = {0};
+				char dst_net[128] = {0};
+				char gw[128] = {0};
+				char ip_pool[256] = {0};
+				char new_gw[128] = {0};
+				addrmask_to_str(se->af, &e->snat_rule.saddr, e->snat_rule.smask, src_net);
+				addrmask_to_str(se->af, &e->snat_rule.daddr, e->snat_rule.dmask, dst_net);
+				addr_to_str(se->af, &e->snat_rule.gw, gw);
+				addrpool_to_str(se->af, &e->snat_rule.min_ip, &e->snat_rule.max_ip, ip_pool);
+				addr_to_str(se->af, &e->snat_rule.new_gw, new_gw);
+ 
+				sprintf(tmp_rule, "-K %s -F %s -T %s -W %s -U %s -O %s -N %s", svc_name, src_net, dst_net, gw, ip_pool, 
+				ip_select_algo_name(e->snat_rule.algo), new_gw);
+				if (strlen(e->snat_rule.out_dev)) {
+					printf("%s --oif %s\n",tmp_rule,  e->snat_rule.out_dev);
+				} else {
+					printf("%s\n", tmp_rule);
+				}
+			} else {
+				printf("-a %s -r %s %s -w %d\n", svc_name, dname, fwd_switch(e->conn_flags), e->weight);
+			}
 		} else if (format & FMT_STATS) {
 			printf("  -> %-28s", dname);
 			print_largenum(e->stats.conns, format);
@@ -1630,10 +1920,32 @@ print_service_entry(ipvs_service_entry_t *se, unsigned int format)
 			printf("  -> %-28s %-9u %-11u %-10u %-10u\n", dname,
 			       e->weight, e->persistconns,
 			       e->activeconns, e->inactconns);
-		} else
+		} else if (format & FMT_SNAT_RULE) {
+			char src_net[128] = {0};
+			char dst_net[128] = {0};
+			char gw[128] = {0};
+			char ip_pool[256] = {0};
+			char new_gw[128] = {0};
+			addrmask_to_str(se->af, &e->snat_rule.saddr, e->snat_rule.smask, src_net);
+			addrmask_to_str(se->af, &e->snat_rule.daddr, e->snat_rule.dmask, dst_net);
+			addr_to_str(se->af, &e->snat_rule.gw, gw);
+			addrpool_to_str(se->af, &e->snat_rule.min_ip, &e->snat_rule.max_ip, ip_pool);
+			addr_to_str(se->af, &e->snat_rule.new_gw, new_gw);
+			printf("  -> %-20s%-20s%-17s%-16s%-32s%-8s%-17s%-10u%-10u\n", 
+		                    src_net,  
+		                    dst_net, 
+		                    gw, 
+		                            e->snat_rule.out_dev,
+		                    ip_pool, 
+		                    ip_select_algo_name(e->snat_rule.algo), 
+		                    new_gw, 
+		                    e->activeconns, 
+		                    e->inactconns);
+		} else {
 			printf("  -> %-28s %-7s %-6d %-10u %-10u\n",
 			       dname, fwd_name(e->conn_flags),
 			       e->weight, e->activeconns, e->inactconns);
+		}
 		free(dname);
 	}
 	free(d);
@@ -1644,7 +1956,7 @@ static void list_laddrs_print_title(void)
 	printf("%-20s %-8s %-20s %-10s %-10s\n" , 
 		"VIP:VPORT" ,
 		"TOTAL" ,
-		"SNAT_IP",
+		"LADDR",
 		"CONFLICTS",
 		"CONNS" );
 }
@@ -1775,6 +2087,8 @@ static void list_service(ipvs_service_t *svc, unsigned int format)
 static void list_all(unsigned int format)
 {
 	struct ip_vs_get_services *get;
+	struct ip_vs_service_entry *snat_service = NULL;
+	int print_able = 0;
 	int i;
 
 	if (!(format & FMT_RULE))
@@ -1789,9 +2103,28 @@ static void list_all(unsigned int format)
 	if (!(format & FMT_NOSORT))
 		ipvs_sort_services(get, ipvs_cmp_services);
 
+	for (i = 0; i < get->num_services; i++) {
+		if (get->entrytable[i].fwmark == 1) {
+			snat_service = &get->entrytable[i];
+			continue;
+		}
+		if (print_able == 0) {
+			print_able = 1;
 	print_title(format);
-	for (i = 0; i < get->num_services; i++)
+		}
 		print_service_entry(&get->entrytable[i], format);
+	}
+	
+	if (snat_service) {
+		if (!(format & FMT_RULE)) { /* if none ./ipvsadm -S */
+			int tmp_format = format;
+			tmp_format |= FMT_SNAT_RULE;
+			print_title(tmp_format);
+			print_service_entry(snat_service, tmp_format);
+		} else {
+			print_service_entry(snat_service, format);
+		}
+	}
 	free(get);
 }
 
@@ -1935,6 +2268,65 @@ addrport_to_anyname(int af, const void *addr, unsigned short port,
 	return buf;
 }
 
+static inline char *ip_select_algo_name(unsigned algo)
+{
+	char *algo_name = NULL;
+	
+	switch (algo) {
+	case IPVS_SNAT_IPS_NORMAL:
+		algo_name = "sdh";
+		break;
+	case IPVS_SNAT_IPS_PERSITENT:
+		algo_name = "sh";
+		break;
+	case IPVS_SNAT_IPS_RANDOM:
+		algo_name = "random";
+		break;
+	}
+	
+	return algo_name;
+}
+
+static void addrmask_to_str(int af, const union nf_inet_addr *addr, unsigned short mask, char *output)
+{                
+	char pbuf[INET6_ADDRSTRLEN] = {0};
+	if (af == AF_INET) {
+		inet_ntop(af, &addr->in, pbuf, sizeof(pbuf));
+		sprintf(output, "%s/%d", pbuf, mask);  
+	} else {
+		inet_ntop(af, &addr->in6, pbuf, sizeof(pbuf));
+		sprintf(output, "[%s]/%d",  pbuf,  mask);  
+	}
+}
+
+static void addr_to_str(int af, const union nf_inet_addr *addr, char *output)
+{
+	char pbuf[INET6_ADDRSTRLEN]; 
+	if (af == AF_INET) {
+		sprintf(output, "%s", inet_ntop(af, (void *)&(addr->in), pbuf, sizeof(pbuf)));  
+	} else {
+		sprintf(output, "[%s]",  inet_ntop(af, (void *)&(addr->in6), pbuf, sizeof(pbuf)));  
+	}
+}
+
+static void addrpool_to_str(int af, const union nf_inet_addr* minaddr, const union nf_inet_addr* maxaddr, char *output)
+{
+	char min_buf[INET6_ADDRSTRLEN] = {0};
+	char max_buf[INET6_ADDRSTRLEN] = {0};
+	if (af == AF_INET) {
+		inet_ntop(af, (void *)&(minaddr->in), min_buf, sizeof(min_buf));
+		inet_ntop(af, (void *)&(maxaddr->in), max_buf, sizeof(max_buf));
+	} else {
+		inet_ntop(af, (void *)&(minaddr->in6), min_buf, sizeof(min_buf));
+		inet_ntop(af, (void *)&(maxaddr->in6), max_buf, sizeof(max_buf));  
+	}
+	
+	if (!strcmp(min_buf, max_buf)) {
+		sprintf(output, "%s", min_buf); 
+	} else {
+		sprintf(output, "%s-%s", min_buf, max_buf); 
+	}
+}
 
 static int str_is_digit(const char *str)
 {

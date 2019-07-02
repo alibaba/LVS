@@ -87,6 +87,25 @@ typedef struct _real_server {
 	int reload_alive;	/* alpha mode will reset rs to unalive. So save the status before reload here */
 } real_server;
 
+
+/* snat rule definetion */
+typedef struct __snat_rule {
+	union nf_inet_addr saddr;
+	uint32_t smask;
+	union nf_inet_addr daddr;
+	uint32_t dmask;
+	union nf_inet_addr gw;
+	union nf_inet_addr minip;
+	union nf_inet_addr maxip;
+	uint32_t conn_flags;
+	uint16_t af;
+	uint8_t algo;
+	union nf_inet_addr new_gw;
+	char out_dev[IP_VS_IFNAME_MAXLEN];
+	int alive;
+	int set;
+} snat_rule;
+
 /* local ip address group definition */
 typedef struct _local_addr_entry {
 	struct sockaddr_storage addr;
@@ -123,6 +142,8 @@ typedef struct _virtual_server {
 	uint16_t service_type;
 	long delay_loop;
 	int ha_suspend;
+	int abs_priority;
+	int cur_max_weight;
 	char sched[SCHED_MAX_LENGTH];
 	char timeout_persistence[MAX_TIMEOUT_LENGTH];
 	unsigned loadbalancing_kind;
@@ -161,6 +182,23 @@ static inline int __ip6_addr_equal(const struct in6_addr *a1,
 		 (a1->s6_addr32[1] ^ a2->s6_addr32[1]) |
 		 (a1->s6_addr32[2] ^ a2->s6_addr32[2]) |
 		 (a1->s6_addr32[3] ^ a2->s6_addr32[3])) == 0);
+}
+
+
+static inline int addr_equal(int af, const union nf_inet_addr *s1, 
+	               const union nf_inet_addr *s2)
+{
+	if (af == AF_INET) {
+		if (s1->in.s_addr == s2->in.s_addr) {
+			return 1;
+		}
+	} else if (af == AF_INET6) {
+		if (__ip6_addr_equal(&s1->in6, &s2->in6)) {
+			return 1;
+		}
+	}
+
+	return 0;
 }
 
 static inline int sockstorage_equal(const struct sockaddr_storage *s1,
@@ -211,16 +249,32 @@ static inline int inaddr_equal(sa_family_t family, void *addr1, void *addr2)
 	return 0;
 }
 
+#define SNAT_NONE               0x0000
+#define SNAT_ADDR               0x0001
+#define SNAT_MASK               0x0002
+
+typedef struct _snat_rule_addr_mask {
+	union nf_inet_addr addr;
+	uint16_t af;
+	uint32_t mask;
+} snat_rule_addr_mask;
+
 /* macro utility */
+#define IS_SNAT_SVC(S) (((S)->vfwmark) == 1)
+#define NOT_SNAT_SVC(s) (((s)->vfwmark) != 1)
+
 #define ISALIVE(S)	((S)->alive)
 #define SET_ALIVE(S)	((S)->alive = 1)
 #define UNSET_ALIVE(S)	((S)->alive = 0)
 #define VHOST(V)	((V)->virtualhost)
 
+#define DEFAULT_SNAT_SCHED "snat_sched"
+
 #define VS_ISEQ(X,Y)	(sockstorage_equal(&(X)->addr,&(Y)->addr)			&&\
 			 (X)->vfwmark                 == (Y)->vfwmark			&&\
 			 (X)->service_type            == (Y)->service_type		&&\
 			 (X)->loadbalancing_kind      == (Y)->loadbalancing_kind	&&\
+			 (X)->abs_priority            == (Y)->abs_priority		&&\
 			 (X)->nat_mask                == (Y)->nat_mask			&&\
 			 (X)->granularity_persistence == (Y)->granularity_persistence	&&\
 			 (X)->syn_proxy		      == (Y)->syn_proxy			&&\
@@ -239,6 +293,14 @@ static inline int inaddr_equal(sa_family_t family, void *addr1, void *addr2)
 
 #define RS_ISEQ(X,Y)	(sockstorage_equal(&(X)->addr,&(Y)->addr) &&	\
 			 (X)->iweight   == (Y)->iweight)
+
+#define SNAT_RS_ISEQ(X, Y) (addr_equal((X)->af, &(X)->saddr, &(Y)->saddr) && (X)->smask == (Y)->smask && \
+		addr_equal((X)->af, &(X)->daddr, &(Y)->daddr) &&  (X)->dmask == (Y)->dmask && \
+		addr_equal((X)->af, &(X)->gw, &(Y)->gw) && !strcmp((X)->out_dev, (Y)->out_dev) && \
+		addr_equal((X)->af, &(X)->minip, &(Y)->minip)  && \
+		addr_equal((X)->af, &(X)->maxip, &(Y)->maxip) && \
+		addr_equal((X)->af, &(X)->new_gw, &(Y)->new_gw)  && \
+		(X)->algo == (Y)->algo)
 
 /* Global vars exported */
 extern check_conf_data *check_data;
@@ -260,5 +322,7 @@ extern void set_rsgroup(char *);
 extern check_conf_data *alloc_check_data(void);
 extern void free_check_data(check_conf_data *);
 extern void dump_check_data(check_conf_data *);
+
+extern void alloc_snat_rule(void);
 
 #endif

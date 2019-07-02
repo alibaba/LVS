@@ -33,6 +33,106 @@
 #include "utils.h"
 #include "ipwrapper.h"
 
+static int
+str2number(const char *s, int min, int max)
+{
+	int number;
+	char *end;
+
+	number = (int) strtol(s, &end, 10);
+	if (*end == '\0' && end != s) {
+		/*
+		 * We parsed a number, let's see if we want this.
+		 * If max <= min then ignore ranges
+		 */
+		if (max <= min || (min <= number && number <= max)) {
+			return number;
+		} else {
+			return -1;
+		}
+	} else {
+		return -1;
+	}
+}
+
+static int str_is_digit(const char *str)
+{
+	size_t offset;
+	size_t top;
+
+	top = strlen(str);
+	for (offset=0; offset<top; offset++) {
+		if (!isdigit((int)*(str+offset))) {
+			break;
+		}
+	}
+
+	return (offset<top)?0:1;
+}
+
+/* 
+ * Get source ip and mask from the argument
+ */
+static int parse_address_mask(char* buf, snat_rule_addr_mask *addrmask)
+{
+	char *portp = NULL;
+	int portn;
+	int result = SNAT_NONE;
+	struct in_addr inaddr;
+	struct in6_addr inaddr6;
+
+	if (buf == NULL || str_is_digit(buf)) {
+		return SNAT_NONE;
+	}
+	
+	if (buf[0] == '[') {
+		buf++;
+		portp = strchr(buf, ']');
+		if (portp == NULL) {
+			return SNAT_NONE;
+		}
+		*portp = '\0';
+		portp++;
+		if (*portp == '/') {
+			*portp = '\0';
+		}  else {
+			return SNAT_NONE;
+		}
+	}
+
+	if (inet_pton(AF_INET6, buf, &inaddr6) > 0) {
+		//addrmask->addr.in6 = inaddr6;
+		//addrmask->mask = 128;
+		//addrmask->af = AF_INET6;
+		log_message(LOG_ERR, "Not support IPv6");
+		return SNAT_NONE;
+	} else {
+		portp = strrchr(buf, '/');
+		if (portp != NULL) {
+			*portp = '\0';
+		}
+		addrmask->af = AF_INET;
+		if (inet_aton(buf, &inaddr) != 0) {
+			addrmask->addr.ip = inaddr.s_addr;
+		} else {
+			return SNAT_NONE;
+		}
+	}
+
+	result |= SNAT_ADDR;
+	if (portp != NULL) { 
+		if ((portn = str2number(portp+1, 0, 32)) != -1) {
+		addrmask->mask= portn;
+		result |= SNAT_MASK;
+		} else {
+			return SNAT_NONE;
+		}
+	}
+
+	return result;
+}
+
+
 /* SSL handlers */
 static void
 ssl_handler(vector strvec)
@@ -83,8 +183,18 @@ static void
 delay_handler(vector strvec)
 {
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
-	vs->delay_loop = atoi(VECTOR_SLOT(strvec, 1)) * TIMER_HZ;
+	vs->delay_loop = atoi(VECTOR_SLOT(strvec, 1)) * TIMER_HZ;;
 }
+
+/* new add 20140319 : for keyword abs_priority  */
+static void
+abspriority_handler(vector strvec)
+{
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	log_message(LOG_INFO, "abs_priority mode open");
+	vs->abs_priority = 1;
+}
+
 static void
 lbalgo_handler(vector strvec)
 {
@@ -147,6 +257,7 @@ static void
 proto_handler(vector strvec)
 {
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+
 	char *str = VECTOR_SLOT(strvec, 1);
 	vs->service_type = (!strcmp(str, "TCP")) ? IPPROTO_TCP : IPPROTO_UDP;
 }
@@ -168,6 +279,173 @@ static void
 ssvr_handler(vector strvec)
 {
 	alloc_ssvr(VECTOR_SLOT(strvec, 1), VECTOR_SLOT(strvec, 2));
+}
+
+static void
+snat_rule_handler(vector strvec)
+{
+	alloc_snat_rule();
+}
+
+static void
+snat_from_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	snat_rule_addr_mask addrmask;
+	
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		int result = parse_address_mask(str, &addrmask);
+		if (result & SNAT_ADDR) {
+			rule->saddr = addrmask.addr;
+		}
+		if (result & SNAT_MASK) {
+			rule->smask = addrmask.mask;
+		}
+		rule->af = addrmask.af;
+	}
+}
+
+static void
+snat_to_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	snat_rule_addr_mask addrmask;
+	
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		int result = parse_address_mask(str, &addrmask);
+		if (result & SNAT_ADDR) {
+			rule->daddr = addrmask.addr;
+		}
+		if (result & SNAT_MASK) {
+			rule->dmask = addrmask.mask;
+		}
+	}
+}
+
+static void
+snat_gw_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	snat_rule_addr_mask addrmask;
+	
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		int result = parse_address_mask(str, &addrmask);
+		if (result & SNAT_ADDR) {
+			rule->gw = addrmask.addr;
+		}
+	}
+}
+
+static void
+snat_oif_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		if (strlen(str) < IP_VS_IFNAME_MAXLEN) {
+			strcpy(rule->out_dev, str);
+		} else {
+			log_message(LOG_ERR, "out dev name too long\n");
+		}
+	}
+}
+
+static void
+snat_algo_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		if (!memcmp(str , "sh" , strlen("sh"))) {
+			rule->algo = IPVS_SNAT_IPS_PERSITENT;
+		}  else if(!memcmp(str , "sdh" , strlen("sdh"))) {
+			rule->algo = IPVS_SNAT_IPS_NORMAL;
+		} else if (!memcmp(str, "random", strlen("random"))) {
+			rule->algo = IPVS_SNAT_IPS_RANDOM;
+		} else {
+			log_message(LOG_ERR, "unkown algo,shoule be one of [sh, sdh, ramdom]\n");
+		}
+	}
+}
+
+static void
+snat_newgw_handler(vector strvec)
+{
+	snat_rule *rule = NULL;
+	snat_rule_addr_mask addrmask;
+	
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		int result = parse_address_mask(str, &addrmask);
+		if (result & SNAT_ADDR) {
+			rule->new_gw= addrmask.addr;
+		}
+	}
+}
+
+static void
+snat_snatip_handler(vector strvec)
+{
+	char *portp = NULL;
+	snat_rule *rule = NULL;
+	snat_rule_addr_mask addrmask;
+	int result;
+	
+	char *str = VECTOR_SLOT(strvec, 1);
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (IS_SNAT_SVC(vs)) {
+		rule = LIST_TAIL_DATA(vs->rs);
+		portp = strchr(str, '-');
+		if (portp == NULL) {
+			result = parse_address_mask(str, &addrmask);
+			if (result & SNAT_ADDR) {
+				rule->minip = addrmask.addr;
+				rule->maxip = rule->minip;
+			} else {
+				log_message(LOG_ERR, "snatip illegal\n");
+				return;
+			}
+		} else {
+			*portp = '\0';
+			portp++;
+			result = parse_address_mask(str, &addrmask);
+			if (result & SNAT_ADDR) {
+			rule->minip = addrmask.addr;
+			} else {
+				log_message(LOG_ERR, "snatip minip illegal\n");
+				return;
+			}
+
+			result = parse_address_mask(portp, &addrmask);
+			if (result & SNAT_ADDR) {
+				rule->maxip = addrmask.addr;
+			} else {
+				log_message(LOG_ERR, "snatip maxip illegal\n");
+				return;
+			}
+
+			if (rule->af == AF_INET) {
+				if (rule->maxip.ip < rule->minip.ip) {
+					log_message(LOG_ERR, "maxip smaller than minip\n");
+				}
+			}
+		}
+	}
 }
 
 /* Real Servers handlers */
@@ -277,7 +555,6 @@ static void
 laddr_gname_handler(vector strvec)
 {
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
-	
 	vs->local_addr_gname = set_value(strvec);
 }
 static void 
@@ -312,6 +589,7 @@ check_init_keywords(void)
 	/* Virtual server mapping */
 	install_keyword_root("virtual_server_group", &vsg_handler);
 	install_keyword_root("virtual_server", &vs_handler);
+	install_keyword("abs_priority", &abspriority_handler); /* new add 20140319 */
 	install_keyword("delay_loop", &delay_handler);
 	install_keyword("lb_algo", &lbalgo_handler);
 	install_keyword("lvs_sched", &lbalgo_handler);
@@ -331,6 +609,18 @@ check_init_keywords(void)
 	install_keyword("quorum_down", &quorum_down_handler);
 	install_keyword("quorum", &quorum_handler);
 	install_keyword("hysteresis", &hysteresis_handler);
+
+	/* snat rule mapping */
+	install_keyword("snat_rule", &snat_rule_handler);
+	install_sublevel();
+	install_keyword("from", &snat_from_handler);
+	install_keyword("to", &snat_to_handler);
+	install_keyword("gw", &snat_gw_handler);
+	install_keyword("oif", &snat_oif_handler);
+	install_keyword("snat_ip", &snat_snatip_handler);
+	install_keyword("algo", &snat_algo_handler);
+	install_keyword("new_gw", &snat_newgw_handler);
+	install_sublevel_end();
 
 	/* Real server mapping */
 	install_keyword("sorry_server", &ssvr_handler);

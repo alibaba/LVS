@@ -80,19 +80,20 @@ static int ipvs_nl_noop_cb(struct nl_msg *msg, void *arg)
 int ipvs_nl_send_message(struct nl_msg *msg, nl_recvmsg_msg_cb_t func, void *arg)
 {
 	int err = EINVAL;
-
 	sock = nl_handle_alloc();
 	if (!sock) {
 		nlmsg_free(msg);
 		return -1;
 	}
 
-	if (genl_connect(sock) < 0)
+	if (genl_connect(sock) < 0) {
 		goto fail_genl;
+	}
 
 	family = genl_ctrl_resolve(sock, IPVS_GENL_NAME);
-	if (family < 0)
+	if (family < 0) {
 		goto fail_genl;
+	}
 
 	/* To test connections and set the family */
 	if (msg == NULL) {
@@ -101,19 +102,21 @@ int ipvs_nl_send_message(struct nl_msg *msg, nl_recvmsg_msg_cb_t func, void *arg
 		return 0;
 	}
 
-	if (nl_socket_modify_cb(sock, NL_CB_VALID, NL_CB_CUSTOM, func, arg) != 0)
+	if (nl_socket_modify_cb(sock, NL_CB_VALID, NL_CB_CUSTOM, func, arg) != 0) {
 		goto fail_genl;
+	}
 
-	if (nl_send_auto_complete(sock, msg) < 0)
+	if (nl_send_auto_complete(sock, msg) < 0) {
 		goto fail_genl;
+	}
 
-	if ((err = -nl_recvmsgs_default(sock)) > 0)
+	if ((err = -nl_recvmsgs_default(sock)) > 0) {
 		goto fail_genl;
+	}
 
 	nlmsg_free(msg);
 
 	nl_handle_destroy(sock);
-
 	return 0;
 
 fail_genl:
@@ -220,8 +223,9 @@ static int ipvs_nl_fill_service_attr(struct nl_msg *msg, ipvs_service_t *svc)
 				     .mask = ~0 };
 
 	nl_service = nla_nest_start(msg, IPVS_CMD_ATTR_SERVICE);
-	if (!nl_service)
+	if (!nl_service) {
 		return -1;
+	}
 
 	NLA_PUT_U16(msg, IPVS_SVC_ATTR_AF, svc->af);
 
@@ -297,8 +301,8 @@ int ipvs_update_service_by_options(ipvs_service_t *svc, unsigned int options)
 		fprintf(stderr, "%s\n", ipvs_strerror(errno));
 		exit(1);
 	}
-	ipvs_service_entry_2_user(entry, &user);
 
+	ipvs_service_entry_2_user(entry, &user);
 	if( options & OPT_SCHEDULER ) {
 		strcpy(user.sched_name, svc->sched_name);
 	}
@@ -417,7 +421,122 @@ static int ipvs_nl_fill_dest_attr(struct nl_msg *msg, ipvs_dest_t *dst)
 nla_put_failure:
 	return -1;
 }
+
+static int ipvs_nl_fill_snat_dest_attr(struct nl_msg *msg, ipvs_snat_dest_t *dst)
+{
+	struct nlattr *nl_snat_dest;
+
+	nl_snat_dest = nla_nest_start(msg, IPVS_CMD_ATTR_SNATDEST);
+	if (!nl_snat_dest) {
+		return -1;
+	}
+
+	/* add special attr */
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_FADDR, sizeof(dst->saddr), &dst->saddr);
+	NLA_PUT_U32(msg, IPVS_SNAT_DEST_ATTR_FMASK, dst->smask);
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_DADDR, sizeof(dst->daddr), &dst->daddr);
+	NLA_PUT_U32(msg, IPVS_SNAT_DEST_ATTR_DMASK, dst->dmask);
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_GW, sizeof(dst->gw), &dst->gw);
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_MINIP, sizeof(dst->min_ip), &dst->min_ip);
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_MAXIP, sizeof(dst->max_ip), &dst->max_ip);
+	NLA_PUT_U8(msg, IPVS_SNAT_DEST_ATTR_ALGO,  dst->algo);
+	NLA_PUT(msg, IPVS_SNAT_DEST_ATTR_NEWGW, sizeof(dst->new_gw), &dst->new_gw);
+	NLA_PUT_U32(msg, IPVS_SNAT_DEST_ATTR_CONNFLAG, dst->conn_flags & IP_VS_CONN_F_FWD_MASK);
+	NLA_PUT_STRING(msg, IPVS_SNAT_DEST_ATTR_OUTDEV, dst->out_dev);
+
+	nla_nest_end(msg, nl_snat_dest);
+	return 0;
+	
+nla_put_failure:
+	return -1;
+}
 #endif
+
+int ipvs_add_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest)
+{
+	ipvs_func = ipvs_add_snat_dest;
+ #ifdef LIBIPVS_USE_NL
+	if (try_nl) {
+		struct nl_msg *msg = ipvs_nl_message(IPVS_CMD_NEW_SNATDEST, 0);
+		if (!msg) {
+			return -1;
+		}
+    
+		if (ipvs_nl_fill_service_attr(msg, svc)) {
+			goto nla_put_failure;
+		}
+
+		if (ipvs_nl_fill_snat_dest_attr(msg, snat_dest)) {
+			goto nla_put_failure;
+		}
+   
+		int ret = ipvs_nl_send_message(msg, ipvs_nl_noop_cb, NULL);
+		return ret;
+	    
+nla_put_failure:
+		nlmsg_free(msg);
+		return -1;       
+	}
+#endif
+
+	return -1;
+}
+
+int ipvs_update_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest)
+{
+	ipvs_func = ipvs_update_snat_dest;
+#ifdef LIBIPVS_USE_NL
+	if (try_nl) {
+		struct nl_msg *msg = ipvs_nl_message(IPVS_CMD_SET_SNATDEST, 0);
+		if (!msg) {
+			return -1;
+		}
+    
+		if (ipvs_nl_fill_service_attr(msg, svc)) {
+			goto nla_put_failure;
+		}
+
+		if (ipvs_nl_fill_snat_dest_attr(msg, snat_dest)) {
+			goto nla_put_failure;
+		}
+
+		return ipvs_nl_send_message(msg, ipvs_nl_noop_cb, NULL);
+  
+nla_put_failure:
+		nlmsg_free(msg);
+		return -1;       
+	}
+#endif
+
+	return -1;
+}
+
+int ipvs_del_snat_dest(ipvs_service_t *svc, ipvs_snat_dest_t *snat_dest)
+{
+	ipvs_func = ipvs_del_snat_dest;
+#ifdef LIBIPVS_USE_NL
+	if (try_nl) {
+		struct nl_msg *msg = ipvs_nl_message(IPVS_CMD_DEL_SNATDEST, 0);
+		if (!msg) {
+			return -1;
+		}
+		if (ipvs_nl_fill_service_attr(msg, svc)) {
+			goto nla_put_failure;
+		}
+     
+		if (ipvs_nl_fill_snat_dest_attr(msg, snat_dest)) {
+			goto nla_put_failure;
+		}
+
+		return ipvs_nl_send_message(msg, ipvs_nl_noop_cb, NULL);
+
+nla_put_failure:
+		nlmsg_free(msg);
+		return -1;
+	}
+#endif
+		return -1;
+}
 
 int ipvs_add_dest(ipvs_service_t *svc, ipvs_dest_t *dest)
 {
@@ -709,6 +828,41 @@ static int ipvs_parse_stats(struct ip_vs_stats_user *stats, struct nlattr *nla)
 
 }
 
+static int ipvs_parse_snat_rule(struct ip_vs_dest_snat_user* snat_rule, struct nlattr *nla) 
+{
+	struct nlattr *attrs[IPVS_SNAT_DEST_ATTR_MAX + 1];
+	if (nla_parse_nested(attrs, IPVS_SNAT_DEST_ATTR_MAX, nla, ip_vs_snat_dest_policy)) {
+		return -1;
+	}
+
+	if (!(attrs[IPVS_SNAT_DEST_ATTR_FADDR] &&
+		attrs[IPVS_SNAT_DEST_ATTR_FMASK] &&
+		attrs[IPVS_SNAT_DEST_ATTR_DADDR] &&
+		attrs[IPVS_SNAT_DEST_ATTR_DMASK] &&
+		attrs[IPVS_SNAT_DEST_ATTR_GW] &&
+		attrs[IPVS_SNAT_DEST_ATTR_MINIP] &&
+		attrs[IPVS_SNAT_DEST_ATTR_MAXIP] &&
+		attrs[IPVS_SNAT_DEST_ATTR_ALGO] &&
+		attrs[IPVS_SNAT_DEST_ATTR_NEWGW] &&
+		attrs[IPVS_SNAT_DEST_ATTR_OUTDEV] && 
+		attrs[IPVS_SNAT_DEST_ATTR_CONNFLAG])) {
+		return -1;
+	}
+
+	memcpy(&snat_rule->saddr, nla_data(attrs[IPVS_SNAT_DEST_ATTR_FADDR]), sizeof(snat_rule->saddr));    
+	snat_rule->smask= nla_get_u32(attrs[IPVS_SNAT_DEST_ATTR_FMASK]);
+	memcpy(&snat_rule->daddr, nla_data(attrs[IPVS_SNAT_DEST_ATTR_DADDR]), sizeof(snat_rule->daddr));
+	snat_rule->dmask= nla_get_u32(attrs[IPVS_SNAT_DEST_ATTR_DMASK]);
+	memcpy(&snat_rule->gw, nla_data(attrs[IPVS_SNAT_DEST_ATTR_GW]), sizeof(snat_rule->gw));
+	memcpy(&snat_rule->min_ip, nla_data(attrs[IPVS_SNAT_DEST_ATTR_MINIP]), sizeof(snat_rule->min_ip));
+	memcpy(&snat_rule->max_ip, nla_data(attrs[IPVS_SNAT_DEST_ATTR_MAXIP]), sizeof(snat_rule->max_ip));
+	snat_rule->algo= nla_get_u8(attrs[IPVS_SNAT_DEST_ATTR_ALGO]);
+	memcpy(&snat_rule->new_gw, nla_data(attrs[IPVS_SNAT_DEST_ATTR_NEWGW]), sizeof(snat_rule->new_gw));
+	snat_rule->conn_flags = nla_get_u32(attrs[IPVS_SNAT_DEST_ATTR_CONNFLAG]);
+	strncpy(snat_rule->out_dev, nla_get_string(attrs[IPVS_SNAT_DEST_ATTR_OUTDEV]), IP_VS_IFNAME_MAXLEN);
+	return 0;
+}
+
 static int ipvs_services_parse_cb(struct nl_msg *msg, void *arg)
 {
 	struct nlmsghdr *nlh = nlmsg_hdr(msg);
@@ -885,20 +1039,29 @@ ipvs_sort_services(struct ip_vs_get_services *s, ipvs_service_cmp_t f)
 static int ipvs_dests_parse_cb(struct nl_msg *msg, void *arg)
 {
 	struct nlmsghdr *nlh = nlmsg_hdr(msg);
-	struct nlattr *attrs[IPVS_DEST_ATTR_MAX + 1];
-	struct nlattr *dest_attrs[IPVS_SVC_ATTR_MAX + 1];
+	//struct nlattr *attrs[IPVS_DEST_ATTR_MAX + 1];
+	    //struct nlattr *dest_attrs[IPVS_SVC_ATTR_MAX + 1];
+	    
+	struct nlattr *attrs[IPVS_CMD_ATTR_MAX + 1];
+	struct nlattr *dest_attrs[IPVS_DEST_ATTR_MAX + 1];
+	
 	struct ip_vs_get_dests **dp = (struct ip_vs_get_dests **)arg;
 	struct ip_vs_get_dests *d = (struct ip_vs_get_dests *)*dp;
 	int i = d->num_dests;
 
-	if (genlmsg_parse(nlh, 0, attrs, IPVS_CMD_ATTR_MAX, ipvs_cmd_policy) != 0)
+	if (genlmsg_parse(nlh, 0, attrs, 
+			IPVS_CMD_ATTR_MAX, ipvs_cmd_policy) != 0) {
 		return -1;
+	}
 
-	if (!attrs[IPVS_CMD_ATTR_DEST])
+	if (!attrs[IPVS_CMD_ATTR_DEST]) {
 		return -1;
+	}
 
-	if (nla_parse_nested(dest_attrs, IPVS_DEST_ATTR_MAX, attrs[IPVS_CMD_ATTR_DEST], ipvs_dest_policy))
+	if (nla_parse_nested(dest_attrs, IPVS_DEST_ATTR_MAX, 
+			attrs[IPVS_CMD_ATTR_DEST], ipvs_dest_policy)) {
 		return -1;
+	}
 
 	memset(&(d->entrytable[i]), 0, sizeof(d->entrytable[i]));
 
@@ -910,8 +1073,9 @@ static int ipvs_dests_parse_cb(struct nl_msg *msg, void *arg)
 	      dest_attrs[IPVS_DEST_ATTR_L_THRESH] &&
 	      dest_attrs[IPVS_DEST_ATTR_ACTIVE_CONNS] &&
 	      dest_attrs[IPVS_DEST_ATTR_INACT_CONNS] &&
-	      dest_attrs[IPVS_DEST_ATTR_PERSIST_CONNS]))
+	      dest_attrs[IPVS_DEST_ATTR_PERSIST_CONNS])) {
 		return -1;
+	}
 
 	memcpy(&(d->entrytable[i].addr),
 	       nla_data(dest_attrs[IPVS_DEST_ATTR_ADDR]),
@@ -927,11 +1091,18 @@ static int ipvs_dests_parse_cb(struct nl_msg *msg, void *arg)
 	d->entrytable[i].af = d->af;
 
 	if (ipvs_parse_stats(&(d->entrytable[i].stats),
-			     dest_attrs[IPVS_DEST_ATTR_STATS]) != 0)
+			     dest_attrs[IPVS_DEST_ATTR_STATS]) != 0) {
 		return -1;
+	}
+
+	if (d->fwmark == 1 && dest_attrs[IPVS_DEST_ATTR_SNATRULE] ) {
+		if (ipvs_parse_snat_rule(&(d->entrytable[i].snat_rule), 
+				dest_attrs[IPVS_DEST_ATTR_SNATRULE]) != 0) {
+			return -1;
+		}
+	}
 
 	i++;
-
 	d->num_dests = i;
 	d = realloc(d, sizeof(*d) + sizeof(ipvs_dest_entry_t) * (d->num_dests + 1));
 	*dp = d;

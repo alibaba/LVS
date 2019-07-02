@@ -332,9 +332,22 @@ alloc_vs(char *ip, char *port)
 	new->quorum_down = NULL;
 	new->quorum = 1;
 	new->hysteresis = 0;
+	new->abs_priority = 0;
+	new->cur_max_weight = -1;
 	new->quorum_state = UP;
 	new->local_addr_gname = NULL;
 	new->vip_bind_dev = NULL;
+
+	/* snat vs init special info */
+	if (IS_SNAT_SVC(new)) {
+		new->loadbalancing_kind = IP_VS_CONN_F_FULLNAT;
+		int tmp_size = sizeof (new->sched);
+		int str_len = strlen(DEFAULT_SNAT_SCHED);
+		if (tmp_size > str_len) {
+			tmp_size = str_len;
+		}
+		strncpy(new->sched, DEFAULT_SNAT_SCHED, tmp_size);
+	}
 
 	list_add(check_data->vs, new);
 }
@@ -344,11 +357,24 @@ void
 alloc_ssvr(char *ip, char *port)
 {
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
-
 	vs->s_svr = (real_server *) MALLOC(sizeof (real_server));
 	vs->s_svr->weight = 1;
 	vs->s_svr->iweight = 1;
 	inet_stosockaddr(ip, port, &vs->s_svr->addr);
+}
+
+static void
+free_snat_rule(void *data)
+{
+	snat_rule *rule = data;
+	FREE(rule);
+}
+
+static void
+dump_snat_rule(void *data)
+{
+	snat_rule *rs = (snat_rule *)data;
+	print_snat_rule(999, rs);
 }
 
 /* Real server facility functions */
@@ -392,6 +418,10 @@ alloc_rs(char *ip, char *port)
 	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
 	real_server *new;
 
+	if (IS_SNAT_SVC(vs)) {
+		return;
+	}
+	
 	new = (real_server *) MALLOC(sizeof (real_server));
 	inet_stosockaddr(ip, port, &new->addr);
 
@@ -401,6 +431,23 @@ alloc_rs(char *ip, char *port)
 
 	if (LIST_ISEMPTY(vs->rs))
 		vs->rs = alloc_list(free_rs, dump_rs);
+	list_add(vs->rs, new);
+}
+
+void 
+alloc_snat_rule(void)
+{
+	virtual_server *vs = LIST_TAIL_DATA(check_data->vs);
+	if (NOT_SNAT_SVC(vs)) {
+		return;
+	}
+	snat_rule *new = (snat_rule *)MALLOC(sizeof(snat_rule));
+	new->algo = IPVS_SNAT_IPS_NORMAL;
+	new->conn_flags = IP_VS_CONN_F_FULLNAT;
+	
+	if (LIST_ISEMPTY(vs->rs)) {
+		vs->rs = alloc_list(free_snat_rule, dump_snat_rule);
+	}
 	list_add(vs->rs, new);
 }
 

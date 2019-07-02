@@ -49,6 +49,8 @@
 #define LVS_CMD_EDIT_DEST	IP_VS_SO_SET_EDITDEST
 #define LVS_CMD_ADD_LADDR	IP_VS_SO_SET_ADDLADDR
 #define LVS_CMD_DEL_LADDR       IP_VS_SO_SET_DELLADDR
+#define LVS_CMD_ADD_SNATDEST	IP_VS_SO_SET_ADDSNAT
+#define LVS_CMD_DEL_SNATDEST	IP_VS_SO_SET_DELSNAT
 
 /* prototypes */
 extern void perform_svr_state(int, virtual_server *, real_server *);
@@ -58,5 +60,7 @@ extern void update_svr_checker_state(int, checker_id_t, virtual_server *, real_s
 extern int init_services(void);
 extern int clear_services(void);
 extern int clear_diff_services(void);
+
+extern int get_max_weight(int flag, list rs);
 
 #endif

@@ -100,6 +100,12 @@ config	IP_VS_PROTO_AH
 	  This option enables support for load balancing AH (Authentication
 	  Header) transport protocol. Say Y if unsure.
 
+config	IP_VS_PROTO_ICMP
+	bool "ICMP snat gateway support"
+	---help---
+	  This option enables support for snat gateway ICMP transport
+	  protocol. Say Y if unsure.
+
 comment "IPVS scheduler"
 
 config	IP_VS_RR
@@ -218,6 +224,14 @@ config	IP_VS_NQ
 	  is no idle server available, the job will be sent to the server
 	  that minimize its expected delay (The Shortest Expected Delay
 	  scheduling algorithm).
+
+	  If you want to compile it in kernel, say Y. To compile it as a
+	  module, choose M here. If unsure, say N.
+
+config	IP_VS_SNAT_SCHED
+	tristate "snat gateway scheduling"
+	---help---
+	  The snat-gateway scheduling match rules like iptables`s rules. 
 
 	  If you want to compile it in kernel, say Y. To compile it as a
 	  module, choose M here. If unsure, say N.

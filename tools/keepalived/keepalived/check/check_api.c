@@ -217,3 +217,105 @@ install_checkers_keyword(void)
 	install_http_check_keyword();
 	install_ssl_check_keyword();
 }
+
+static char *
+ip_select_algo_name(unsigned algo)
+{
+	char *algo_name = NULL;
+	
+	switch (algo) {
+	case IPVS_SNAT_IPS_NORMAL:
+		algo_name = "sdh";
+		break;
+	case IPVS_SNAT_IPS_PERSITENT:
+		algo_name = "sh";
+		break;
+	case IPVS_SNAT_IPS_RANDOM:
+		algo_name = "random";
+		break;
+	}
+	
+	return algo_name;
+}
+
+static void 
+addrmask_to_str(int af, const union nf_inet_addr *addr,
+	                            unsigned short mask, char *output)
+{                
+	char pbuf[INET6_ADDRSTRLEN] = {0};
+	if (af == AF_INET) {
+		inet_ntop(af, &addr->in, pbuf, sizeof(pbuf));
+		sprintf(output, "%s/%d", pbuf, mask);  
+	} else {
+		inet_ntop(af, &addr->in6, pbuf, sizeof(pbuf));
+		sprintf(output, "[%s]/%d",  pbuf,  mask);  
+	}
+}
+
+static void
+addr_to_str(int af, const union nf_inet_addr *addr, char *output)
+{
+	char pbuf[INET6_ADDRSTRLEN]; 
+	if (af == AF_INET) {
+		sprintf(output, "%s", inet_ntop(af, (void *)&(addr->in), pbuf, sizeof(pbuf)));  
+	} else {
+		sprintf(output, "[%s]",  inet_ntop(af, (void *)&(addr->in6), pbuf, sizeof(pbuf)));  
+	}
+}
+
+static void
+addrpool_to_str(int af, const union nf_inet_addr* minaddr, 
+	                                const union nf_inet_addr* maxaddr, char *output)
+{
+	char min_buf[INET6_ADDRSTRLEN] = {0};
+	char max_buf[INET6_ADDRSTRLEN] = {0};
+	if (af == AF_INET) {
+		inet_ntop(af, (void *)&(minaddr->in), min_buf, sizeof(min_buf));
+		inet_ntop(af, (void *)&(maxaddr->in), max_buf, sizeof(max_buf));
+	} else {
+		inet_ntop(af, (void *)&(minaddr->in6), min_buf, sizeof(min_buf));
+		inet_ntop(af, (void *)&(maxaddr->in6), max_buf, sizeof(max_buf));  
+	}
+	
+	 if (!strcmp(min_buf, max_buf)) {
+		sprintf(output, "%s", min_buf); 
+	 } else {
+		sprintf(output, "%s-%s", min_buf, max_buf); 
+	 }
+}
+
+void 
+print_snat_rule(int cmd, snat_rule *rs)
+{
+	char output[512] = {0};
+	
+	char src_mask[128] = {0};
+	char dst_mask[128] = {0};
+	char gw[128] = {0};
+	char new_gw[128] = {0};
+	char snatip[256] = {0};
+
+	addrmask_to_str(rs->af, &rs->saddr, rs->smask, src_mask);
+	addrmask_to_str(rs->af, &rs->daddr, rs->dmask, dst_mask);
+	addr_to_str(rs->af, &rs->gw, gw);
+	addrpool_to_str(rs->af, &rs->minip, &rs->maxip, snatip);
+	addr_to_str(rs->af, &rs->new_gw, new_gw);
+	sprintf(output,
+	    "snat rule[-F %s -T %s -W %s --oif %s -U %s -O %s -N %s]",
+	    src_mask,
+	    dst_mask,
+	    gw,
+	    rs->out_dev,
+	    snatip,
+	    ip_select_algo_name(rs->algo),
+	    new_gw);
+
+	if (cmd == LVS_CMD_DEL_SNATDEST) {
+		log_message(LOG_INFO, "Removing %s", output);
+	} else if (cmd == LVS_CMD_ADD_SNATDEST) {
+		log_message(LOG_INFO, "Adding %s", output);
+	} else {
+		log_message(LOG_INFO, "%s", output);
+	}
+}
+
