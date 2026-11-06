@@ -24,7 +24,7 @@ PM_HIBERNATION_PREPARE	The system is going to hibernate or suspend, tasks will
 			be frozen immediately.
 
 PM_POST_HIBERNATION	The system memory state has been restored from a
-			hibernation image or an error occured during the
+			hibernation image or an error occurred during the
 			hibernation.  Device drivers' .resume() callbacks have
 			been executed and tasks have been thawed.
 
